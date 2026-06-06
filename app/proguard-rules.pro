@@ -1,21 +1,18 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Keep Room Database components and metadata
+-keepclassmembers class * extends androidx.room.RoomDatabase {
+    <init>(...);
+}
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Database class *
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Custom Data Models - keep entirely to support SQLite column mapping and Moshi serialization
+-keep class com.example.data.model.** { *; }
+-keep class com.example.data.local.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Retain generic type signatures and annotations for reflection/serialization systems
+-keepattributes Signature, *Annotation*, InnerClasses, EnclosingMethod
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep generated Room helper tables and code templates
+-keep class androidx.room.** { *; }
+-dontwarn androidx.room.**
+

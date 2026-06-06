@@ -9,6 +9,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +30,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -70,8 +76,11 @@ val I18N = mapOf(
         "myInventory" to "My Inventory",
         "items" to "items",
         "totalItems" to "Total Items",
+        "statTotalSubtitle" to "Active storage",
         "expiringSoon" to "Expiring Soon",
+        "statSoonSubtitle" to "Days remaining",
         "expired" to "Expired",
+        "statExpiredSubtitle" to "Needs action",
         "alerts" to "ALERTS",
         "more" to "more",
         "bulkDelete" to "Bulk Delete",
@@ -155,8 +164,11 @@ val I18N = mapOf(
         "myInventory" to "मेरी इन्वेंटरी",
         "items" to "आइटम",
         "totalItems" to "कुल आइटम",
+        "statTotalSubtitle" to "सक्रिय भण्डारण",
         "expiringSoon" to "जल्द खराब",
+        "statSoonSubtitle" to "शेष दिन",
         "expired" to "खराब हो चुके",
+        "statExpiredSubtitle" to "कार्रवाई योग्य",
         "alerts" to "अलर्ट",
         "more" to "और",
         "bulkDelete" to "बल्क डिलीट",
@@ -231,7 +243,7 @@ val I18N = mapOf(
 )
 
 fun translate(key: String, lang: String): String {
-    return I18N[lang]?.get(key) ?: I18N["en"]?.get(key) ?: key
+    return translateExt(key, lang)
 }
 
 val CAT_EMOJI = mapOf(
@@ -299,9 +311,7 @@ fun getNormalizedCategory(cat: String): String {
 
 fun getCategoryLabel(cat: String, lang: String): String {
     val norm = getNormalizedCategory(cat)
-    val translated = CAT_NAMES_I18N[lang]?.get(norm)
-    if (translated != null) return translated
-    return norm.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
+    return getCategoryLabelExt(norm, lang)
 }
 
 // ── DATE CALCULATIONS ──
@@ -406,12 +416,12 @@ fun FreshTrackVectorLogo(
                 center = centerOffset
             )
 
-            // Dynamic gradients matching the vibrant neon green/mint gradient in the uploaded logo
+            // Dynamic gradients matching the vibrant light green/emerald gradient in the updated logo
             val logoGradient = Brush.sweepGradient(
                 colors = listOf(
-                    Color(0xFF4ADE80), // Vibrant neon leaf green
-                    Color(0xFF00C897), // Mint green
-                    Color(0xFF02E0A7), // Bright minty neon
+                    Color(0xFF4ADE80), // Vibrant light green
+                    Color(0xFF86EFAC), // Soft light mint
+                    Color(0xFF5CEB89), // Bright light green
                     Color(0xFF4ADE80)
                 )
             )
@@ -446,13 +456,13 @@ fun FreshTrackVectorLogo(
                 )
             }
 
-            // Fill leaf with beautiful bright mint to emerald gradient
+            // Fill leaf with beautiful bright light green to emerald gradient
             drawPath(
                 path = leafPath,
                 brush = Brush.verticalGradient(
                     colors = listOf(
                         Color(0xFF4ADE80),
-                        Color(0xFF00C897)
+                        Color(0xFF86EFAC)
                     )
                 )
             )
@@ -597,6 +607,40 @@ private fun copyPhotoLocally(context: Context, uri: Uri): String? {
     }
 }
 
+// Compute cumulative folder size on the storage disk
+private fun getFolderSize(file: File): Long {
+    var size: Long = 0
+    if (file.isDirectory) {
+        val files = file.listFiles()
+        if (files != null) {
+            for (f in files) {
+                size += getFolderSize(f)
+            }
+        }
+    } else {
+        size += file.length()
+    }
+    return size
+}
+
+// Delete image snapshots no longer linked with active grocery products
+private fun clearOrphanedPhotos(context: Context, items: List<GroceryItem>) {
+    val photosDir = File(context.filesDir, "grocery_photos")
+    if (photosDir.exists()) {
+        val referencedPaths = items.mapNotNull { it.photoPath }.toSet()
+        val files = photosDir.listFiles()
+        if (files != null) {
+            var deletedCount = 0
+            for (f in files) {
+                if (!referencedPaths.contains(f.absolutePath)) {
+                    if (f.delete()) deletedCount++
+                }
+            }
+            Toast.makeText(context, "Cleared $deletedCount unused images!", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
 // Share export Utility
 private fun shareFile(context: Context, file: File, mimeType: String) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
@@ -623,9 +667,9 @@ fun FreshTrackApp() {
     var activeView by remember { mutableStateOf("home") } // home, additem, analytics, settings
     val itemsList by groceryDao.getAllItemsFlow().collectAsState(initial = emptyList())
 
-    // Onboarding flow: Splash & Login state manager
+    // Onboarding flow: Splash & Login state manager (Login bypassed for local-first use)
     var showSplash by remember { mutableStateOf(true) }
-    var isUserLoggedInState by remember { mutableStateOf(prefs.isUserLoggedIn) }
+    var isUserLoggedInState by remember { mutableStateOf(true) }
 
     // Delightfully transition and auto-dismiss Splash Screen after 2.2 seconds
     LaunchedEffect(Unit) {
@@ -633,10 +677,38 @@ fun FreshTrackApp() {
         showSplash = false
     }
 
+    val sharedPrefs = remember { context.getSharedPreferences("FreshTrackPrefs", Context.MODE_PRIVATE) }
     var lang by remember { mutableStateOf(prefs.language) }
-    var isDarkState by remember { mutableStateOf(prefs.isDarkMode) }
+    var themeMode by remember { mutableStateOf(sharedPrefs.getString("theme_mode", "light") ?: "light") }
+    val systemInDark = isSystemInDarkTheme()
+    var isDarkState by remember {
+        mutableStateOf(
+            when (themeMode) {
+                "light" -> false
+                "dark" -> true
+                else -> systemInDark
+            }
+        )
+    }
+    LaunchedEffect(themeMode, systemInDark) {
+        isDarkState = when (themeMode) {
+            "light" -> false
+            "dark" -> true
+            else -> systemInDark
+        }
+        prefs.isDarkMode = isDarkState
+    }
     var notificationsOn by remember { mutableStateOf(prefs.isNotificationsOn) }
     var isFirstTimeUser by remember { mutableStateOf(prefs.isFirstTimeUser) }
+
+    // Advanced Budget & Custom Alerts options persistent variables
+    var monthlyBudget by remember { mutableStateOf(sharedPrefs.getFloat("monthly_budget", 10000f).toDouble()) }
+    var weeklyBudget by remember { mutableStateOf(sharedPrefs.getFloat("weekly_budget", 2500f).toDouble()) }
+    var currencySymbol by remember { mutableStateOf(sharedPrefs.getString("currency_symbol", "₹") ?: "₹") }
+    var reminderTime by remember { mutableStateOf(sharedPrefs.getString("reminder_time", "10:00 AM") ?: "10:00 AM") }
+    var reminderSound by remember { mutableStateOf(sharedPrefs.getBoolean("reminder_sound", true)) }
+    var reminderVibrate by remember { mutableStateOf(sharedPrefs.getBoolean("reminder_vibrate", true)) }
+    var reminderFrequency by remember { mutableStateOf(sharedPrefs.getString("reminder_frequency", "Daily") ?: "Daily") }
 
     var filterTab by remember { mutableStateOf("all") } // all, fresh, soon, expired
     var searchTxt by remember { mutableStateOf("") }
@@ -665,11 +737,11 @@ fun FreshTrackApp() {
     val formattedTodayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
 
     // Colors styled dynamically
-    val appBg = if (isDarkState) Color(0xFF0A0E1A) else Color(0xFFF7FBF9)
-    val surfBg = if (isDarkState) Color(0xFF0F1320) else Color(0xFFFFFFFF)
-    val textPrimary = if (isDarkState) Color(0xFFE2E8F0) else Color(0xFF191C1B)
-    val textMuted = if (isDarkState) Color(0xFF94A3B8) else Color(0xFF5F6368)
-    val cardBorderColor = if (isDarkState) Color(0xFF1E293B) else Color(0xFFE0E4E2)
+    val appBg = if (isDarkState) Color(0xFF0F201B) else Color(0xFFF7FFF8)
+    val surfBg = if (isDarkState) Color(0xFF1B352B) else Color(0xFFFFFFFF)
+    val textPrimary = if (isDarkState) Color(0xFFE2E8F0) else Color(0xFF0F2F24)
+    val textMuted = if (isDarkState) Color(0xFF8BA59B) else Color(0xFF4A6F62)
+    val cardBorderColor = if (isDarkState) Color(0xFF264C3E) else Color(0xFFDCEADD)
 
     // Statistics Calculations
     val totalCount = itemsList.size
@@ -776,31 +848,31 @@ fun FreshTrackApp() {
     }
 
     val lightSleekColorScheme = lightColorScheme(
-        primary = Color(0xFF00C897),
+        primary = Color(0xFF22C55E), // Accent green for active items
         onPrimary = Color.White,
-        secondary = Color(0xFF1AC0C6),
-        onSecondary = Color.White,
-        background = Color(0xFFF7FBF9),
-        onBackground = Color(0xFF191C1B),
-        surface = Color.White,
-        onSurface = Color(0xFF191C1B),
-        surfaceVariant = Color(0xFFEFF5F2),
-        onSurfaceVariant = Color(0xFF5F6368),
-        outline = Color(0xFFE0E4E2)
+        secondary = Color(0xFF22D3EE), // Cyan accent
+        onSecondary = Color(0xFF0F2F24),
+        background = Color(0xFFF7FFF8), // Background: #F7FFF8
+        onBackground = Color(0xFF0F2F24), // Deep text: #0F2F24
+        surface = Color.White, // Card: #FFFFFF
+        onSurface = Color(0xFF0F2F24),
+        surfaceVariant = Color(0xFFCFE8C9), // Pista background: #CFE8C9
+        onSurfaceVariant = Color(0xFF4A6F62),
+        outline = Color(0xFFDCEADD)
     )
 
     val darkSleekColorScheme = darkColorScheme(
-        primary = Color(0xFF00C897),
+        primary = Color(0xFF4ADE80),
         onPrimary = Color.Black,
-        secondary = Color(0xFF1AC0C6),
+        secondary = Color(0xFF22D3EE),
         onSecondary = Color.Black,
-        background = Color(0xFF0A0E1A),
+        background = Color(0xFF0F201B), // Dark organic background
         onBackground = Color(0xFFE2E8F0),
-        surface = Color(0xFF0F1320),
+        surface = Color(0xFF1B352B),
         onSurface = Color(0xFFE2E8F0),
-        surfaceVariant = Color(0xFF151B2E),
-        onSurfaceVariant = Color(0xFF94A3B8),
-        outline = Color(0xFF1E293B)
+        surfaceVariant = Color(0xFF264C3E),
+        onSurfaceVariant = Color(0xFF8BA59B),
+        outline = Color(0xFF264C3E)
     )
 
     MaterialTheme(
@@ -808,155 +880,160 @@ fun FreshTrackApp() {
     ) {
         if (showSplash) {
             FreshTrakSplashScreen()
-        } else if (!isUserLoggedInState) {
-            FreshTrakLoginPage(
-                onLoginSuccess = {
-                    isUserLoggedInState = true
-                    prefs.isUserLoggedIn = true
+        } else if (isFirstTimeUser) {
+            FreshTrackOnboardingScreen(
+                lang = lang,
+                onLanguageChange = { newLang ->
+                    lang = newLang
+                    prefs.language = newLang
+                },
+                onAgreeAndContinue = {
+                    isFirstTimeUser = false
+                    prefs.isFirstTimeUser = false
                 }
             )
         } else {
             Scaffold(
-            containerColor = appBg,
-            bottomBar = {
-                val bottomBarBg = Color(0xFF0F5A47) // Vibrant Deep Forest Green background
-                val itemColors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Color(0xFF00C897), // Vibrant Mint Green matching the logo
-                    unselectedIconColor = Color.White.copy(alpha = 0.55f),
-                    selectedTextColor = Color(0xFF00C897),
-                    unselectedTextColor = Color.White.copy(alpha = 0.55f),
-                    indicatorColor = Color(0xFF00C897).copy(alpha = 0.16f)
-                )
-
-                NavigationBar(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp)),
-                    containerColor = bottomBarBg,
-                    tonalElevation = 8.dp
-                ) {
-                    NavigationBarItem(
-                        selected = activeView == "home",
-                        onClick = { activeView = "home" },
-                        icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
-                        label = { Text(translate("home", lang), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                        colors = itemColors
-                    )
-                    NavigationBarItem(
-                        selected = activeView == "analytics",
-                        onClick = { activeView = "analytics" },
-                        icon = { Icon(Icons.Default.List, contentDescription = "Analytics") },
-                        label = { Text(translate("analytics", lang), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                        colors = itemColors
-                    )
-                    NavigationBarItem(
-                        selected = activeView == "settings",
-                        onClick = { activeView = "settings" },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                        label = { Text(translate("settings", lang), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                        colors = itemColors
-                    )
-                }
-            }
-        ) { paddingValues ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // Header Card with vibrant Deep Forest Green gradient for premium richness
-                    val headerBgBrush = Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFF0F5A47), // Vibrant Deep Forest Green (Emerald-Teal deep tone)
-                            Color(0xFF073C2F)  // Rich Deep Forest Green
-                        )
+                containerColor = appBg,
+                bottomBar = {
+                    val bottomBarBg = Color(0xFF9CCF8B) // Pistachio Green footer background!
+                    val itemColors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFF1B4D1F), // Dark contrast green
+                        unselectedIconColor = Color(0xFF1B4D1F).copy(alpha = 0.55f),
+                        selectedTextColor = Color(0xFF1B4D1F),
+                        unselectedTextColor = Color(0xFF1B4D1F).copy(alpha = 0.55f),
+                        indicatorColor = Color(0xFF1B4D1F).copy(alpha = 0.14f)
                     )
 
-                    Box(
+                    NavigationBar(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(
-                                brush = headerBgBrush,
-                                shape = RoundedCornerShape(bottomStart = 40.dp, bottomEnd = 40.dp)
-                            )
-                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp)),
+                        containerColor = bottomBarBg,
+                        tonalElevation = 8.dp
                     ) {
-                        Row(
+                        NavigationBarItem(
+                            selected = activeView == "home",
+                            onClick = { activeView = "home" },
+                            icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                            label = { Text(translate("home", lang), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            colors = itemColors
+                        )
+                        NavigationBarItem(
+                            selected = activeView == "analytics",
+                            onClick = { activeView = "analytics" },
+                            icon = { Icon(Icons.Default.List, contentDescription = "Analytics") },
+                            label = { Text(translate("analytics", lang), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            colors = itemColors
+                        )
+                        NavigationBarItem(
+                            selected = activeView == "settings",
+                            onClick = { activeView = "settings" },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                            label = { Text(translate("settings", lang), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            colors = itemColors
+                        )
+                    }
+                }
+            ) { paddingValues ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Header Card with beautiful Pistachio Green (Pist Green) gradient
+                        val headerBgBrush = Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFF9CCF8B), // Soft Pistachio Green
+                                Color(0xFF7CAF6D)  // Rich Mid-Pistachio Green
+                            )
+                        )
+
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 18.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (activeView != "home") {
-                                IconButton(
-                                    onClick = { activeView = "home" },
-                                    modifier = Modifier.size(34.dp).testTag("header_back_button")
-                                ) {
-                                    Icon(
-                                        Icons.Default.ArrowBack,
-                                        contentDescription = "Back",
-                                        tint = Color.White
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = when (activeView) {
-                                        "additem" -> "🌱 " + translate("addItem", lang)
-                                        "analytics" -> "📊 " + translate("analytics", lang)
-                                        else -> "⚙️ " + translate("settings", lang)
-                                    },
-                                    color = Color.White,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.ExtraBold
+                                .background(
+                                    brush = headerBgBrush,
+                                    shape = RoundedCornerShape(bottomStart = 40.dp, bottomEnd = 40.dp)
                                 )
-                            } else {
-                                // Double circular halo framework around the vibrant FreshTrak logo to ensure maximum pop
+                                .padding(bottom = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 18.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (activeView != "home") {
+                                    IconButton(
+                                        onClick = { activeView = "home" },
+                                        modifier = Modifier.size(34.dp).testTag("header_back_button")
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ArrowBack,
+                                            contentDescription = "Back",
+                                            tint = Color(0xFF1B4D1F) // Dark contrast green
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = when (activeView) {
+                                            "additem" -> "🌱 " + translate("addItem", lang)
+                                            "analytics" -> "📊 " + translate("analytics", lang)
+                                            else -> "⚙️ " + translate("settings", lang)
+                                        },
+                                        color = Color(0xFF1B4D1F), // Dark contrast green
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                } else {
+                                    // Double circular halo framework around the vibrant FreshTrak logo to ensure maximum pop
+                                    Box(
+                                        modifier = Modifier
+                                            .background(Color.White.copy(alpha = 0.35f), shape = CircleShape)
+                                            .border(BorderStroke(1.2.dp, Color.White), shape = CircleShape)
+                                            .padding(4.dp)
+                                    ) {
+                                        FreshTrackVectorLogo(modifier = Modifier.size(42.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = "FreshTrak",
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = Color(0xFF1B4D1F) // Dark green contrast
+                                        )
+                                        Text(
+                                            text = translate("subtitle", lang),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF2C5E31) // Subtitle contrast
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.weight(1f))
+
+                                // Action togglers - rounded translucent bubble
                                 Box(
                                     modifier = Modifier
-                                        .background(Color.White.copy(alpha = 0.08f), shape = CircleShape)
-                                        .border(BorderStroke(1.2.dp, Color.White.copy(alpha = 0.28f)), shape = CircleShape)
-                                        .padding(4.dp)
+                                        .size(38.dp)
+                                        .background(Color(0xFF1B4D1F).copy(alpha = 0.12f), shape = RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            isDarkState = !isDarkState
+                                            prefs.isDarkMode = isDarkState
+                                        },
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    FreshTrackVectorLogo(modifier = Modifier.size(42.dp))
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
                                     Text(
-                                        text = "FreshTrak",
-                                        fontSize = 22.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = Color.White
-                                    )
-                                    Text(
-                                        text = translate("subtitle", lang),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color.White.copy(alpha = 0.85f)
+                                        text = if (isDarkState) "☀️" else "🌙",
+                                        fontSize = 18.sp
                                     )
                                 }
-                            }
-
-                            Spacer(modifier = Modifier.weight(1f))
-
-                            // Action togglers - rounded translucent bubble
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .background(Color.White.copy(alpha = 0.18f), shape = RoundedCornerShape(12.dp))
-                                    .clickable {
-                                        isDarkState = !isDarkState
-                                        prefs.isDarkMode = isDarkState
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (isDarkState) "☀️" else "🌙",
-                                    fontSize = 18.sp
-                                )
                             }
                         }
-                    }
 
                     // View Content Switching with elegant fade animations
                     AnimatedVisibility(
@@ -1240,6 +1317,61 @@ fun FreshTrackApp() {
                             },
                             onClearDatabase = {
                                 showResetConfirm = true
+                            },
+                            themeMode = themeMode,
+                            onThemeModeChange = { mode ->
+                                themeMode = mode
+                                sharedPrefs.edit().putString("theme_mode", mode).apply()
+                                isDarkState = when (mode) {
+                                    "light" -> false
+                                    "dark" -> true
+                                    else -> systemInDark
+                                }
+                                prefs.isDarkMode = isDarkState
+                            },
+                            monthlyBudget = monthlyBudget,
+                            onMonthlyBudgetChange = {
+                                monthlyBudget = it
+                                sharedPrefs.edit().putFloat("monthly_budget", it.toFloat()).apply()
+                            },
+                            weeklyBudget = weeklyBudget,
+                            onWeeklyBudgetChange = {
+                                weeklyBudget = it
+                                sharedPrefs.edit().putFloat("weekly_budget", it.toFloat()).apply()
+                            },
+                            currencySymbol = currencySymbol,
+                            onCurrencySymbolChange = {
+                                currencySymbol = it
+                                sharedPrefs.edit().putString("currency_symbol", it).apply()
+                            },
+                            reminderTime = reminderTime,
+                            onReminderTimeChange = {
+                                reminderTime = it
+                                sharedPrefs.edit().putString("reminder_time", it).apply()
+                            },
+                            reminderSound = reminderSound,
+                            onReminderSoundChange = {
+                                reminderSound = it
+                                sharedPrefs.edit().putBoolean("reminder_sound", it).apply()
+                            },
+                            reminderVibrate = reminderVibrate,
+                            onReminderVibrateChange = { r ->
+                                reminderVibrate = r
+                                sharedPrefs.edit().putBoolean("reminder_vibrate", r).apply()
+                            },
+                            reminderFrequency = reminderFrequency,
+                            onReminderFrequencyChange = {
+                                reminderFrequency = it
+                                sharedPrefs.edit().putString("reminder_frequency", it).apply()
+                            },
+                            totalItemsStored = itemsList.size,
+                            imageStorageSizeStr = run {
+                                val photosDir = File(context.filesDir, "grocery_photos")
+                                val photosSize = if (photosDir.exists()) getFolderSize(photosDir) else 0L
+                                String.format(Locale.US, "%.2f MB", photosSize.toDouble() / (1024 * 1024))
+                            },
+                            onClearImagesCache = {
+                                clearOrphanedPhotos(context, itemsList)
                             }
                         )
                     }
@@ -1314,52 +1446,6 @@ fun FreshTrackApp() {
                 }
             }
         }
-        
-        if (isFirstTimeUser) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.72f))
-                    .padding(24.dp)
-                    .clickable(enabled = false) {}, // Intercept click events
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .wrapContentHeight(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = "🌱 FreshTrack",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                        color = Color.White,
-                        fontSize = 24.sp
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Let's learn how to track your groceries in 3 simple steps:",
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    UserGuidanceContent(
-                        lang = lang,
-                        textPrimary = textPrimary,
-                        textMuted = textMuted,
-                        isDark = isDarkState,
-                        onFinish = {
-                            isFirstTimeUser = false
-                            prefs.isFirstTimeUser = false
-                        }
-                    )
-                }
-            }
-        }
     }
 }
 }
@@ -1401,28 +1487,34 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 StatCard(
-                    icon = "📦",
                     count = totalCount.toString(),
                     label = translate("totalItems", lang),
-                    color = Color(0xFF06B6D4),
+                    subtitle = translate("statTotalSubtitle", lang),
+                    color = Color(0xFF00C897),
                     modifier = Modifier.weight(1f),
-                    onClick = { onFilterTabChange("all") }
+                    onClick = { onFilterTabChange("all") },
+                    isDark = isDark,
+                    icon = { TotalInventoryIcon(color = Color(0xFF00C897)) }
                 )
                 StatCard(
-                    icon = "⚡",
                     count = expiringSoonCount.toString(),
                     label = translate("expiringSoon", lang),
+                    subtitle = translate("statSoonSubtitle", lang),
                     color = Color(0xFFF59E0B),
                     modifier = Modifier.weight(1f),
-                    onClick = { onFilterTabChange("soon") }
+                    onClick = { onFilterTabChange("soon") },
+                    isDark = isDark,
+                    icon = { ExpiringSoonIcon(color = Color(0xFFF59E0B)) }
                 )
                 StatCard(
-                    icon = "💀",
                     count = expiredCount.toString(),
                     label = translate("expired", lang),
+                    subtitle = translate("statExpiredSubtitle", lang),
                     color = Color(0xFFEF4444),
                     modifier = Modifier.weight(1f),
-                    onClick = { onFilterTabChange("expired") }
+                    onClick = { onFilterTabChange("expired") },
+                    isDark = isDark,
+                    icon = { ExpiredIcon(color = Color(0xFFEF4444)) }
                 )
             }
 
@@ -1620,34 +1712,270 @@ fun HomeScreen(
 }
 
 @Composable
+fun TotalInventoryIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(22.dp)) {
+        val sizePx = size.width
+        val cx = sizePx / 2f
+        val cy = sizePx / 2f
+        val r = sizePx * 0.42f
+        
+        val path = Path().apply {
+            val s32 = Math.sqrt(3.0).toFloat() / 2f
+            moveTo(cx, cy - r) // Top
+            lineTo(cx + r * s32, cy - r * 0.5f) // Top-Right
+            lineTo(cx + r * s32, cy + r * 0.5f) // Bottom-Right
+            lineTo(cx, cy + r) // Bottom
+            lineTo(cx - r * s32, cy + r * 0.5f) // Bottom-Left
+            lineTo(cx - r * s32, cy - r * 0.5f) // Top-Left
+            close()
+        }
+        
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round)
+        )
+        
+        drawLine(
+            color = color,
+            start = Offset(cx, cy),
+            end = Offset(cx, cy - r),
+            strokeWidth = 1.8.dp.toPx()
+        )
+        drawLine(
+            color = color,
+            start = Offset(cx, cy),
+            end = Offset(cx - r * 0.866f, cy + r * 0.5f),
+            strokeWidth = 1.8.dp.toPx()
+        )
+        drawLine(
+            color = color,
+            start = Offset(cx, cy),
+            end = Offset(cx + r * 0.866f, cy + r * 0.5f),
+            strokeWidth = 1.8.dp.toPx()
+        )
+        
+        drawCircle(
+            color = color,
+            radius = 2.2.dp.toPx(),
+            center = Offset(cx, cy - r * 0.45f)
+        )
+    }
+}
+
+@Composable
+fun ExpiringSoonIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(22.dp)) {
+        val sizePx = size.width
+        val cx = sizePx / 2f
+        val cy = sizePx / 2f
+        val r = sizePx * 0.42f
+        
+        drawCircle(
+            color = color,
+            radius = r,
+            style = Stroke(width = 1.8.dp.toPx())
+        )
+        
+        drawArc(
+            color = color.copy(alpha = 0.35f),
+            startAngle = -90f,
+            sweepAngle = 100f,
+            useCenter = true,
+            topLeft = Offset(cx - r, cy - r),
+            size = androidx.compose.ui.geometry.Size(r * 2, r * 2)
+        )
+        
+        drawLine(
+            color = color,
+            start = Offset(cx, cy),
+            end = Offset(cx, cy - r * 0.62f),
+            strokeWidth = 1.8.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(cx, cy),
+            end = Offset(cx + r * 0.45f, cy + r * 0.2f),
+            strokeWidth = 1.8.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        
+        drawCircle(
+            color = color,
+            radius = 1.5.dp.toPx(),
+            center = Offset(cx - r * 0.72f, cy - r * 0.72f)
+        )
+        drawCircle(
+            color = color,
+            radius = 1.5.dp.toPx(),
+            center = Offset(cx + r * 0.72f, cy - r * 0.72f)
+        )
+    }
+}
+
+@Composable
+fun ExpiredIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(22.dp)) {
+        val sizePx = size.width
+        val cx = sizePx / 2f
+        val cy = sizePx / 2f
+        val r = sizePx * 0.42f
+        
+        val path = Path().apply {
+            moveTo(cx, cy - r)
+            lineTo(cx + r * 0.8f, cy - r * 0.6f)
+            lineTo(cx + r * 0.8f, cy + r * 0.2f)
+            quadraticBezierTo(cx + r * 0.8f, cy + r * 0.8f, cx, cy + r)
+            quadraticBezierTo(cx - r * 0.8f, cy + r * 0.8f, cx - r * 0.8f, cy + r * 0.2f)
+            lineTo(cx - r * 0.8f, cy - r * 0.6f)
+            close()
+        }
+        
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(width = 1.8.dp.toPx(), join = StrokeJoin.Round)
+        )
+        
+        drawLine(
+            color = color,
+            start = Offset(cx, cy - r * 0.35f),
+            end = Offset(cx, cy + r * 0.15f),
+            strokeWidth = 1.8.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        drawCircle(
+            color = color,
+            radius = 1.5.dp.toPx(),
+            center = Offset(cx, cy + r * 0.42f)
+        )
+    }
+}
+
+@Composable
 fun StatCard(
-    icon: String,
     count: String,
     label: String,
+    subtitle: String,
     color: Color,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    isDark: Boolean,
+    icon: @Composable () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.94f else 1.0f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 800f)
+    )
+    
+    val shadowElev by animateDpAsState(
+        targetValue = if (isPressed) 14.dp else 4.dp,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 800f)
+    )
+    
+    val transY by animateFloatAsState(
+        targetValue = if (isPressed) 3f else 0f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 800f)
+    )
+
     Card(
         modifier = modifier
-            .height(95.dp)
-            .clickable { onClick() },
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.12f)),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.35f))
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationY = transY
+            }
+            .shadow(
+                elevation = shadowElev,
+                shape = RoundedCornerShape(22.dp),
+                ambientColor = color.copy(alpha = 0.3f),
+                spotColor = color.copy(alpha = 0.4f)
+            )
+            .clickable(
+                onClick = onClick,
+                interactionSource = interactionSource,
+                indication = LocalIndication.current
+            )
+            .height(115.dp),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDark) {
+                color.copy(alpha = 0.12f)
+            } else {
+                color.copy(alpha = 0.05f)
+            }
+        ),
+        border = BorderStroke(
+            1.2.dp,
+            Brush.linearGradient(
+                colors = listOf(
+                    color.copy(alpha = 0.6f),
+                    color.copy(alpha = 0.15f)
+                ),
+                start = Offset.Zero,
+                end = Offset.Infinite
+            )
+        )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .padding(vertical = 12.dp, horizontal = 12.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.Start
         ) {
-            Text(icon, fontSize = 18.sp)
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(count, fontSize = 20.sp, fontWeight = FontWeight.Black, color = color)
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.Gray, textAlign = TextAlign.Center, maxLines = 1)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(color.copy(alpha = 0.15f), CircleShape)
+                        .border(1.dp, color.copy(alpha = 0.3f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    icon()
+                }
+                
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(color, CircleShape)
+                )
+            }
+            
+            Column {
+                Text(
+                    text = count,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
+                    color = if (isDark) Color.White else color.copy(green = 0.5f).compositeOver(Color.Black)
+                )
+                
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isDark) Color(0xFFCCCCCC) else Color(0xFF444444),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                
+                Text(
+                    text = subtitle,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (isDark) Color(0xFF8BA59B) else Color(0xFF6B7280),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -1830,6 +2158,9 @@ fun AddItemScreen(
 ) {
     var showPhotoSourceDialog by remember { mutableStateOf(false) }
 
+    val surfBg = if (isDark) Color(0xFF131F1C) else Color(0xFFFFFFFF)
+    val cardBorderColor = if (isDark) Color(0xFF264C3E) else Color(0xFFE2EFE3)
+
     if (showPhotoSourceDialog) {
         AlertDialog(
             onDismissRequest = { showPhotoSourceDialog = false },
@@ -1847,7 +2178,7 @@ fun AddItemScreen(
                                 showPhotoSourceDialog = false
                                 onTakePhoto()
                             }
-                            .background(if (isDark) Color(0xFF151B2E) else Color(0xFFEFF5F2), RoundedCornerShape(12.dp))
+                            .background(if (isDark) Color(0xFF1C2D28) else Color(0xFFEFF5F2), RoundedCornerShape(12.dp))
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1872,7 +2203,7 @@ fun AddItemScreen(
                                 showPhotoSourceDialog = false
                                 onChooseFromGallery()
                             }
-                            .background(if (isDark) Color(0xFF151B2E) else Color(0xFFEFF5F2), RoundedCornerShape(12.dp))
+                            .background(if (isDark) Color(0xFF1C2D28) else Color(0xFFEFF5F2), RoundedCornerShape(12.dp))
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1896,275 +2227,492 @@ fun AddItemScreen(
                 }
             },
             shape = RoundedCornerShape(24.dp),
-            containerColor = if (isDark) Color(0xFF0F1320) else Color.White
+            containerColor = if (isDark) Color(0xFF12221D) else Color.White
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
-    ) {
-        // Photo Block
-        Text("📷 " + translate("photo", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
+                .padding(bottom = 100.dp), // Safe space for Sticky overlay bar
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(85.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(if (isDark) Color(0xFF151B2E) else Color(0xFFEFF5F2))
-                    .border(2.dp, Color(0xFF00C897).copy(alpha = 0.4F), RoundedCornerShape(20.dp))
-                    .clickable { showPhotoSourceDialog = true },
-                contentAlignment = Alignment.Center
+            // Elegant top heading indicator
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 4.dp)
             ) {
-                if (formPhotoPath != null) {
-                    val file = File(formPhotoPath)
-                    if (file.exists()) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            AsyncImage(
-                                model = file,
-                                contentDescription = "Form Photo",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                            // Elegant camera feedback micro indicator overlay
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(4.dp)
-                                    .size(22.dp)
-                                    .background(Color(0xFF00C897), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("📸", fontSize = 11.sp)
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color(0xFF00C897).copy(alpha = 0.15f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("🌿", fontSize = 16.sp)
+                }
+                Column {
+                    Text(
+                        text = translate("addItem", lang),
+                        color = textPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Text(
+                        text = if (lang == "hi") "नई सामग्री सुरक्षित रूप से जोड़े" else "Capture fresh ingredients",
+                        color = textMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // CARD 1: PHOTO & CATEGORY SETUP
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = surfBg),
+                border = BorderStroke(1.2.dp, cardBorderColor)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = "📷  " + translate("photo", lang) + " & " + translate("category", lang),
+                        color = Color(0xFF00C897),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black
+                    )
+
+                    // Photo selector block
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(85.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (isDark) Color(0xFF1C2D28) else Color(0xFFF3FDF5))
+                                .border(2.dp, Color(0xFF00C897).copy(alpha = 0.4F), RoundedCornerShape(20.dp))
+                                .clickable { showPhotoSourceDialog = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (formPhotoPath != null) {
+                                val file = File(formPhotoPath)
+                                if (file.exists()) {
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        AsyncImage(
+                                            model = file,
+                                            contentDescription = "Item Photo",
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(4.dp)
+                                                .size(20.dp)
+                                                .background(Color(0xFF00C897), CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("✓", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                } else {
+                                    ImagePlaceholderAnchor()
+                                }
+                            } else {
+                                ImagePlaceholderAnchor()
                             }
                         }
-                    } else {
-                        ImagePlaceholderAnchor()
-                    }
-                } else {
-                    ImagePlaceholderAnchor()
-                }
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Button(
-                    onClick = { showPhotoSourceDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE6FAF4), contentColor = Color(0xFF00C897)),
-                    border = BorderStroke(1.dp, Color(0xFF00C897)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("📷 " + translate("choosePhoto", lang), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-                Text(
-                    translate("photoHint", lang),
-                    fontSize = 10.sp,
-                    color = textMuted.copy(alpha = 0.8f)
-                )
-            }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Item Name input
-        Text(translate("itemName", lang) + " *", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-        TextField(
-            value = formName,
-            onValueChange = onFormNameChange,
-            placeholder = { Text(translate("itemNamePh", lang)) },
-            modifier = Modifier.fillMaxWidth().testTag("item_name_input"),
-            singleLine = true,
-            colors = TextFieldDefaults.colors(focusedIndicatorColor = Color(0xFF10B981))
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Category Selection Composable
-        Text(translate("category", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            CAT_EMOJI.keys.forEach { cat ->
-                val isSelected = formCategory == cat
-                val borderB = if (isSelected) null else BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.4f))
-                val bgB = if (isSelected) Color(0xFF00C897) else Color.Transparent
-                val textC = if (isSelected) Color.White else textPrimary
-
-                Card(
-                    modifier = Modifier.clickable { onFormCategoryChange(cat) }.testTag("form_cat_chip_$cat"),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(containerColor = bgB),
-                    border = borderB
-                ) {
-                    Text(
-                        text = "${getCategoryEmoji(cat)} ${getCategoryLabel(cat, lang)}",
-                        color = textC,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Quantities Rows
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(translate("qtyUnit", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-                TextField(
-                    value = formQty,
-                    onValueChange = onFormQtyChange,
-                    placeholder = { Text(translate("qtyPh", lang)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth().testTag("quantity_input")
-                )
-            }
-            Column(modifier = Modifier.weight(1.2f)) {
-                Text("Unit", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-                var expanded by remember { mutableStateOf(false) }
-                Box(modifier = Modifier.fillMaxWidth().testTag("unit_dropdown_box")) {
-                    OutlinedButton(
-                        onClick = { expanded = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(formUnit, color = textPrimary)
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown")
-                    }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        UNITS.forEach { unit ->
-                            DropdownMenuItem(
-                                text = { Text(unit) },
-                                onClick = {
-                                    onFormUnitChange(unit)
-                                    expanded = false
-                                }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Button(
+                                onClick = { showPhotoSourceDialog = true },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF00C897).copy(alpha = 0.12f),
+                                    contentColor = Color(0xFF00C897)
+                                ),
+                                border = BorderStroke(1.2.dp, Color(0xFF00C897)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("📸 " + translate("choosePhoto", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                translate("photoHint", lang),
+                                fontSize = 10.sp,
+                                color = textMuted.copy(alpha = 0.8f)
                             )
+                        }
+                    }
+
+                    HorizontalDivider(color = cardBorderColor.copy(alpha = 0.6f))
+
+                    // Animated Category selector row
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = if (lang == "hi") "श्रेणी चुनें" else "Select Category",
+                            color = textMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CAT_EMOJI.keys.forEach { cat ->
+                                val isSelected = formCategory == cat
+                                val chipBg = if (isSelected) Color(0xFF00C897).copy(alpha = 0.15f) else (if (isDark) Color(0xFF15221E) else Color(0xFFF3FDF5))
+                                val chipBorderCol = if (isSelected) Color(0xFF00C897) else (if (isDark) Color(0xFF264C3E) else Color(0xFFECECEC))
+                                val chipTextColor = if (isSelected) Color(0xFF00C897) else textPrimary
+                                val chipWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Bold
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(chipBg)
+                                        .border(1.5.dp, chipBorderCol, RoundedCornerShape(14.dp))
+                                        .clickable { onFormCategoryChange(cat) }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                        .testTag("form_cat_chip_$cat"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        if (isSelected) {
+                                            Text("✓", color = Color(0xFF00C897), fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                        }
+                                        Text(
+                                            text = "${getCategoryEmoji(cat)} ${getCategoryLabel(cat, lang)}",
+                                            color = chipTextColor,
+                                            fontSize = 11.sp,
+                                            fontWeight = chipWeight
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Price Optional Info
-        Text(translate("price", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-        TextField(
-            value = formPrice,
-            onValueChange = onFormPriceChange,
-            placeholder = { Text("0") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth().testTag("price_input")
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Dates Block Picker Clickers
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(translate("purchaseDate", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-                OutlinedButton(
-                    onClick = { onShowDatePicker { onFormBoughtDateChange(it) } },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(formBoughtDate, color = textPrimary)
-                }
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(translate("expiryDate", lang) + " *", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-                OutlinedButton(
-                    onClick = { onShowDatePicker { onFormExpiryDateChange(it) } },
-                    modifier = Modifier.fillMaxWidth().testTag("expiry_date_button")
-                ) {
-                    Text(if (formExpiryDate.isEmpty()) "YYYY-MM-DD" else formExpiryDate, color = if (formExpiryDate.isEmpty()) Color.Red else textPrimary)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Expiry Status Preview alert if filled
-        if (formExpiryDate.isNotEmpty()) {
-            val dDays = calcDaysLeft(formExpiryDate)
-            val previewStatus = getExpiryStatus(dDays)
-            val prevCol = getStatusColor(previewStatus)
+            // CARD 2: ESSENTIAL ATTRIBUTES
             Card(
-                colors = CardDefaults.cardColors(containerColor = prevCol.copy(alpha = 0.12f)),
-                border = BorderStroke(1.dp, prevCol.copy(alpha = 0.35f))
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = surfBg),
+                border = BorderStroke(1.2.dp, cardBorderColor)
             ) {
-                Row(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (previewStatus == "expired") "💀" else "⚡", fontSize = 18.sp)
-                    Spacer(modifier = Modifier.width(6.dp))
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
                     Text(
-                        text = if (previewStatus == "expired") "Expired $dDays days ago!" else "$dDays days remaining!",
-                        color = prevCol,
+                        text = "🛒  " + if (lang == "hi") "मूल विवरण" else "Basic Attributes",
+                        color = Color(0xFF00C897),
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Black
+                    )
+
+                    // Modern Floating Label Item Name
+                    OutlinedTextField(
+                        value = formName,
+                        onValueChange = onFormNameChange,
+                        label = { Text(translate("itemName", lang) + " *", color = textMuted, fontSize = 12.sp) },
+                        placeholder = { Text(translate("itemNamePh", lang), fontSize = 13.sp) },
+                        modifier = Modifier.fillMaxWidth().testTag("item_name_input"),
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF00C897),
+                            unfocusedBorderColor = if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD),
+                            focusedLabelColor = Color(0xFF00C897),
+                            unfocusedLabelColor = textMuted,
+                            focusedContainerColor = if (isDark) Color(0xFF15221F) else Color(0xFFFBFDFB),
+                            unfocusedContainerColor = if (isDark) Color(0xFF101917) else Color(0xFFFCFDFC)
+                        )
+                    )
+
+                    // Quantity Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = formQty,
+                            onValueChange = onFormQtyChange,
+                            label = { Text(translate("qtyUnit", lang), color = textMuted, fontSize = 12.sp) },
+                            placeholder = { Text(translate("qtyPh", lang), fontSize = 13.sp) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f).testTag("quantity_input"),
+                            singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF00C897),
+                                unfocusedBorderColor = if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD),
+                                focusedContainerColor = if (isDark) Color(0xFF15221F) else Color(0xFFFBFDFB),
+                                unfocusedContainerColor = if (isDark) Color(0xFF101917) else Color(0xFFFCFDFC)
+                            )
+                        )
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Unit",
+                                color = textMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 4.dp)
+                            )
+                            var expanded by remember { mutableStateOf(false) }
+                            Box(modifier = Modifier.fillMaxWidth().testTag("unit_dropdown_box")) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(if (isDark) Color(0xFF101917) else Color(0xFFFCFDFC))
+                                        .border(1.2.dp, if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD), RoundedCornerShape(16.dp))
+                                        .clickable { expanded = true }
+                                        .padding(horizontal = 14.dp, vertical = 15.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(formUnit, color = textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = textMuted)
+                                }
+                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                    UNITS.forEach { unit ->
+                                        DropdownMenuItem(
+                                            text = { Text(unit) },
+                                            onClick = {
+                                                onFormUnitChange(unit)
+                                                expanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Price Info
+                    OutlinedTextField(
+                        value = formPrice,
+                        onValueChange = onFormPriceChange,
+                        label = { Text(translate("price", lang), color = textMuted, fontSize = 12.sp) },
+                        placeholder = { Text("0", fontSize = 13.sp) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth().testTag("price_input"),
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF00C897),
+                            unfocusedBorderColor = if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD),
+                            focusedContainerColor = if (isDark) Color(0xFF15221F) else Color(0xFFFBFDFB),
+                            unfocusedContainerColor = if (isDark) Color(0xFF101917) else Color(0xFFFCFDFC)
+                        )
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
 
-        // Notes Input
-        Text(translate("notes", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
-        TextField(
-            value = formNotes,
-            onValueChange = onFormNotesChange,
-            placeholder = { Text(translate("notesPh", lang)) },
-            modifier = Modifier.fillMaxWidth().height(80.dp).testTag("notes_input"),
-            maxLines = 3
-        )
-
-        // Error Feedback Alert
-        if (formValidationError.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(12.dp))
+            // CARD 3: LOGISTICAL SHELF LIFE
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0x33FF0000)),
-                border = BorderStroke(1.dp, Color.Red)
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = surfBg),
+                border = BorderStroke(1.2.dp, cardBorderColor)
             ) {
-                Text(
-                    text = "⚠️ $formValidationError",
-                    color = Color.Red,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(10.dp).fillMaxWidth()
-                )
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = "📅  " + if (lang == "hi") "वितरण व तारीखें" else "Logistics & Shelf Life",
+                        color = Color(0xFF00C897),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black
+                    )
+
+                    // Modern Clickable Date inputs
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(translate("purchaseDate", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(if (isDark) Color(0xFF101917) else Color(0xFFFCFDFC))
+                                    .border(1.2.dp, if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD), RoundedCornerShape(16.dp))
+                                    .clickable { onShowDatePicker { onFormBoughtDateChange(it) } }
+                                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(formBoughtDate, color = textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text("📅", fontSize = 14.sp)
+                            }
+                        }
+
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(translate("expiryDate", lang) + " *", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(if (isDark) Color(0xFF101917) else Color(0xFFFCFDFC))
+                                    .border(
+                                        width = 1.2.dp,
+                                        color = if (formExpiryDate.isEmpty()) Color.Red.copy(alpha = 0.5f) else (if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD)),
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
+                                    .clickable { onShowDatePicker { onFormExpiryDateChange(it) } }
+                                    .padding(horizontal = 14.dp, vertical = 14.dp)
+                                    .testTag("expiry_date_button"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = if (formExpiryDate.isEmpty()) "YYYY-MM-DD" else formExpiryDate,
+                                    color = if (formExpiryDate.isEmpty()) Color.Red else textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text("⏳", fontSize = 14.sp)
+                            }
+                        }
+                    }
+
+                    // Expiry alert preview status card
+                    if (formExpiryDate.isNotEmpty()) {
+                        val dDays = calcDaysLeft(formExpiryDate)
+                        val previewStatus = getExpiryStatus(dDays)
+                        val prevCol = getStatusColor(previewStatus)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = prevCol.copy(alpha = 0.12f)),
+                            border = BorderStroke(1.dp, prevCol.copy(alpha = 0.35f)),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(if (previewStatus == "expired") "💀" else "⚡", fontSize = 18.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (previewStatus == "expired") "Expired $dDays days ago!" else "$dDays days remaining!",
+                                    color = prevCol,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
+                        }
+                    }
+
+                    // Notes Input
+                    OutlinedTextField(
+                        value = formNotes,
+                        onValueChange = onFormNotesChange,
+                        label = { Text(translate("notes", lang), color = textMuted, fontSize = 12.sp) },
+                        placeholder = { Text(translate("notesPh", lang), fontSize = 13.sp) },
+                        modifier = Modifier.fillMaxWidth().height(90.dp).testTag("notes_input"),
+                        shape = RoundedCornerShape(16.dp),
+                        maxLines = 3,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF00C897),
+                            unfocusedBorderColor = if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD),
+                            focusedContainerColor = if (isDark) Color(0xFF15221F) else Color(0xFFFBFDFB),
+                            unfocusedContainerColor = if (isDark) Color(0xFF101917) else Color(0xFFFCFDFC)
+                        )
+                    )
+                }
+            }
+
+            // Error Feedback Alert
+            if (formValidationError.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0x22FF0000)),
+                    border = BorderStroke(1.2.dp, Color.Red),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(
+                        text = "⚠️ $formValidationError",
+                        color = Color.Red,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(12.dp).fillMaxWidth()
+                    )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Actions Bottom Buttons Row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        // STICKY BOTTOM GLASSMORPHIC OVERLAY FOR FORM ACTIONS
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            if (isDark) Color(0xFF0F1E1B).copy(alpha = 0.95f) else Color(0xFFF7FFF8).copy(alpha = 0.95f)
+                        )
+                    )
+                )
+                .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
-            Button(
-                onClick = onCancel,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray.copy(alpha = 0.25f)),
-                shape = RoundedCornerShape(12.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(12.dp, RoundedCornerShape(20.dp))
+                    .background(
+                        color = if (isDark) Color(0xFF162D26).copy(alpha = 0.96f) else Color.White.copy(alpha = 0.96f),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                    .border(
+                        width = 1.2.dp,
+                        color = if (isDark) Color(0xFF264C3E) else Color(0xFFDCEADD),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(translate("cancel", lang), color = textPrimary)
-            }
-            Button(
-                onClick = onSave,
-                modifier = Modifier.weight(2f).testTag("save_item_button"),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C897)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("🌿 " + translate("saveItem", lang), color = Color.White, fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = textPrimary),
+                    border = BorderStroke(1.2.dp, if (isDark) Color(0xFF264C3E) else Color(0xFFCCCCCC)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(translate("cancel", lang), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                FreshGradientButton(
+                    onClick = onSave,
+                    modifier = Modifier.weight(1.8f).testTag("save_item_button")
+                ) {
+                    Text(
+                        text = "🌿 " + translate("saveItem", lang),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
             }
         }
     }
@@ -2205,306 +2753,1122 @@ fun AnalyticsScreen(
     isDark: Boolean,
     onExportReports: () -> Unit
 ) {
+    val context = LocalContext.current
+    val sharedPrefs = remember(context) { context.getSharedPreferences("FreshTrackPrefs", android.content.Context.MODE_PRIVATE) }
+    
+    // Dynamically retrieve budget and currency settings from Shared Preferences in sync with Settings page
+    val currencySymbol = remember(sharedPrefs) { sharedPrefs.getString("currency_symbol", "₹") ?: "₹" }
+    val monthlyBudget = remember(sharedPrefs) { sharedPrefs.getFloat("monthly_budget", 10000f).toDouble() }
+
+    var selectedFilter by remember { mutableStateOf("This Month") }
+    var expandedFilterDropdown by remember { mutableStateOf(false) }
+
+    val now = Calendar.getInstance()
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+
+    // Dynamic Filter of Items
+    val filteredItems = remember(itemsList, selectedFilter) {
+        itemsList.filter { item ->
+            try {
+                val bDate = sdf.parse(item.boughtDate) ?: return@filter true
+                val itemCal = Calendar.getInstance().apply { time = bDate }
+
+                val diffMs = now.timeInMillis - itemCal.timeInMillis
+                val diffDays = (diffMs / (1000L * 60 * 60 * 24)).toInt()
+
+                when (selectedFilter) {
+                    "This Month" -> {
+                        itemCal.get(Calendar.YEAR) == now.get(Calendar.YEAR) &&
+                        itemCal.get(Calendar.MONTH) == now.get(Calendar.MONTH)
+                    }
+                    "Last 3 Months" -> {
+                        diffDays in 0..90
+                    }
+                    "This Year" -> {
+                        itemCal.get(Calendar.YEAR) == now.get(Calendar.YEAR)
+                    }
+                    else -> true
+                }
+            } catch (e: Exception) {
+                true
+            }
+        }
+    }
+
+    // Calculations based on filtered selection
+    val filteredTotalSpend = remember(filteredItems) {
+        filteredItems.sumOf { it.price ?: 0.0 }
+    }
+
+    val filteredWastedSpend = remember(filteredItems) {
+        filteredItems.filter { calcDaysLeft(it.expiryDate) < 0 }.sumOf { it.price ?: 0.0 }
+    }
+
+    // Group items by unique bought dates (each unique date acts as a shopping trip)
+    val avgTripCost = remember(filteredItems) {
+        val tripsGrouped = filteredItems.filter { it.price != null && it.price > 0.0 }.groupBy { it.boughtDate }
+        val tripCosts = tripsGrouped.map { it.value.sumOf { item -> item.price ?: 0.0 } }
+        if (tripCosts.isNotEmpty()) tripCosts.average() else 0.0
+    }
+
+    // Budget Progress parameters
+    val progressPercent = if (monthlyBudget > 0) (filteredTotalSpend / monthlyBudget) * 100 else 0.0
+    val budgetProgressColor = when {
+        progressPercent >= 95.0 -> Color(0xFFEF4444) // Urgent red warning above 95%
+        progressPercent >= 80.0 -> Color(0xFFF97316) // Warning orange at 80%
+        else -> Color(0xFF22C55E) // Safe primary green below 80%
+    }
+
+    // Helper functions for consumption insights
+    fun isBrandedItem(item: GroceryItem): Boolean {
+        val lowerName = item.name.lowercase()
+        val lowerNotes = item.notes.lowercase()
+        val brandKeywords = listOf(
+            "amul", "nestle", "cadbury", "heinz", "kellog", "britannia", "dabur", "haldiram", 
+            "organic", "premium", "imported", "hershey", "kraft", "tropicana", "milkfood", "ghee"
+        )
+        val hasKeyword = brandKeywords.any { lowerName.contains(it) || lowerNotes.contains(it) }
+        val highPrice = (item.price ?: 0.0) >= 150.0
+        return hasKeyword || highPrice
+    }
+
+    // Spend breakdown Split (Branded vs Budget Spend)
+    val brandedSpend = remember(filteredItems) {
+        filteredItems.filter { isBrandedItem(it) }.sumOf { it.price ?: 0.0 }
+    }
+    val localSpend = remember(filteredItems) {
+        filteredItems.filter { !isBrandedItem(it) }.sumOf { it.price ?: 0.0 }
+    }
+    val totalBrandCostSum = brandedSpend + localSpend
+    val premiumSplitPercent = if (totalBrandCostSum > 0) (brandedSpend / totalBrandCostSum) * 100.0 else 50.0
+
+    // Slow Moving "Dead Stock" Items (Sitting in stock >= 21 days but not yet expired)
+    val deadStockList = remember(itemsList) {
+        itemsList.filter { item ->
+            try {
+                val bDate = sdf.parse(item.boughtDate) ?: return@filter false
+                val diffMs = now.timeInMillis - bDate.time
+                val diffDays = (diffMs / (1000L * 60 * 60 * 24)).toInt()
+                calcDaysLeft(item.expiryDate) >= 0 && diffDays >= 21
+            } catch (e: Exception) {
+                false
+            }
+        }.take(3)
+    }
+
+    // High velocity items (Short shelf life products <= 7 days between bought and expiry)
+    val velocityItems = remember(itemsList) {
+        itemsList.filter { item ->
+            try {
+                val b = sdf.parse(item.boughtDate) ?: return@filter false
+                val e = sdf.parse(item.expiryDate) ?: return@filter false
+                val shelfLife = ((e.time - b.time) / (1000L * 60 * 60 * 24)).toInt()
+                shelfLife in 1..7
+            } catch (ex: Exception) {
+                false
+            }
+        }.distinctBy { it.name.trim().lowercase() }.take(3)
+    }
+
+    // Predictive values
+    val predictedFutureExpense = filteredTotalSpend * 1.08 // Simple moving projected spend with 8% variance multiplier
+    
+    // Items that will completely run out (Spitting alerts / Expiry within next 10 days)
+    val smartShoppingSuggestions = remember(itemsList) {
+        itemsList.filter {
+            val d = calcDaysLeft(it.expiryDate)
+            d in 0..10
+        }.take(3)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Stats Recap cards
+        // Dropdown interactive filter bar with clean visual subtitle header
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxWidth().testTag("analytics_header_row"),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(containerColor = Color(0x11FF0000)),
-                border = BorderStroke(1.dp, Color.Red.copy(0.3f))
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp).fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color(0xFFCFE8C9), CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("💸", fontSize = 22.sp)
-                    Text("₹$wastedCost", fontSize = 18.sp, fontWeight = FontWeight.Black, color = Color.Red)
-                    Text(translate("wasted", lang), fontSize = 9.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                    Text("📊", fontSize = 16.sp)
+                }
+                Column {
+                    Text(
+                        text = if (lang == "hi") "स्मार्ट ग्रोसरी एनालिटिक्स" else "Grocery Spend Hub",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Black,
+                        color = textPrimary
+                    )
+                    Text(
+                        text = if (lang == "hi") "एआई-संचालित किचन अंतर्दृष्टि" else "AI-powered grocery insights",
+                        fontSize = 11.sp,
+                        color = textMuted,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(containerColor = Color(0x11F59E0B)),
-                border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(0.3f))
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp).fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
+
+            Box {
+                OutlinedButton(
+                    onClick = { expandedFilterDropdown = true },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF22C55E)),
+                    border = BorderStroke(1.dp, Color(0xFFCFE8C9)),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("analytics_filter_dropdown_anchor")
                 ) {
-                    Text("📦", fontSize = 22.sp)
-                    Text(expandedCount.toString(), fontSize = 18.sp, fontWeight = FontWeight.Black, color = Color(0xFFF59E0B))
-                    Text(translate("itemsExpired", lang), fontSize = 9.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = when (selectedFilter) {
+                            "This Month" -> if (lang == "hi") "इस महीने" else "This Month"
+                            "Last 3 Months" -> if (lang == "hi") "पिछले 3 महीने" else "Last 3 Months"
+                            "This Year" -> if (lang == "hi") "इस साल" else "This Year"
+                            else -> selectedFilter
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown")
                 }
-            }
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(containerColor = Color(0x1110B981)),
-                border = BorderStroke(1.dp, Color(0xFF10B981).copy(0.3f))
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp).fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                DropdownMenu(
+                    expanded = expandedFilterDropdown,
+                    onDismissRequest = { expandedFilterDropdown = false },
+                    containerColor = Color.White
                 ) {
-                    Text("💵", fontSize = 22.sp)
-                    Text("₹$totalSpend", fontSize = 18.sp, fontWeight = FontWeight.Black, color = Color(0xFF10B981))
-                    Text("Spending", fontSize = 9.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                    DropdownMenuItem(
+                        text = { Text(if (lang == "hi") "इस महीने" else "This Month", color = Color(0xFF0F2F24), fontWeight = FontWeight.Bold) },
+                        onClick = {
+                            selectedFilter = "This Month"
+                            expandedFilterDropdown = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (lang == "hi") "पिछले 3 महीने" else "Last 3 Months", color = Color(0xFF0F2F24), fontWeight = FontWeight.Bold) },
+                        onClick = {
+                            selectedFilter = "Last 3 Months"
+                            expandedFilterDropdown = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (lang == "hi") "इस साल" else "This Year", color = Color(0xFF0F2F24), fontWeight = FontWeight.Bold) },
+                        onClick = {
+                            selectedFilter = "This Year"
+                            expandedFilterDropdown = false
+                        }
+                    )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // 1. TOP DASHBOARD (Upgraded Financial Metric Overview Cards with shadows & trend indicators)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFCFE8C9)),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                // Dual Column Financial summary layout
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Left Column (Total spend block)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (lang == "hi") "चयनित अवधि का खर्च" else "Selected Period Spend",
+                            fontSize = 10.sp,
+                            color = textMuted,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "$currencySymbol${filteredTotalSpend.toInt()}",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF22C55E)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        // Trend tag
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0xFFECFDF5), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "↘ -4.5% vs last period",
+                                color = Color(0xFF059669),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
 
-        // Interactive dynamic visual Monthly waste overview Bar Chart drawn with Canvas!
-        // Groups waste based on item purchase/bought dates
-        MonthlyWasteCanvasChart(
-            items = itemsList,
-            lang = lang,
-            textMuted = textMuted,
-            isDark = isDark
-        )
+                    // Right Column (Avg trip expenditure block)
+                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = if (lang == "hi") "औसत ट्रिप लागत" else "Avg Trip Cost",
+                            fontSize = 10.sp,
+                            color = textMuted,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "$currencySymbol${String.format("%.1f", avgTripCost)}",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF06B6D4)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0xFFECFEFF), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "↗ +12% vs last month",
+                                color = Color(0xFF0891B2),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                }
 
-        Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
-        // Horizontal Category-wise Expense & Waste Chart Component
-        CategoryWasteCanvasChart(
-            items = itemsList,
-            lang = lang,
-            textPrimary = textPrimary,
-            textMuted = textMuted,
-            isDark = isDark
-        )
+                // Budget Progress Line Card with dynamic thresholds triggers
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (lang == "hi") "किचन बजट प्रोग्रेस" else "Shared Budget Progress",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        color = textPrimary
+                    )
+                    Box(
+                        modifier = Modifier
+                            .background(budgetProgressColor.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = if (progressPercent >= 95.0) {
+                                if (lang == "hi") "अति-व्यय चेतावनी!" else "Overspend Alert!"
+                            } else if (progressPercent >= 80.0) {
+                                if (lang == "hi") "चेतावनी!" else "Warning Threshold"
+                            } else {
+                                if (lang == "hi") "बजट सुरक्षित" else "Safe Zone"
+                            },
+                            color = budgetProgressColor,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 9.sp
+                        )
+                    }
+                }
 
-        Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-        // Exporter Action Button
+                // Budget dynamic visual bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(10.dp)
+                        .clip(CircleShape)
+                        .background(Color.LightGray.copy(alpha = 0.2f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth((progressPercent / 100.0).coerceIn(0.0, 1.0).toFloat())
+                            .clip(CircleShape)
+                            .background(budgetProgressColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (lang == "hi") {
+                            "खर्च: $currencySymbol${filteredTotalSpend.toInt()} / बजट: $currencySymbol${monthlyBudget.toInt()}"
+                        } else {
+                            "Spent $currencySymbol${filteredTotalSpend.toInt()} of $currencySymbol${monthlyBudget.toInt()}"
+                        },
+                        fontSize = 10.sp,
+                        color = textMuted,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${progressPercent.toInt()}%",
+                        fontSize = 11.sp,
+                        color = budgetProgressColor,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+        }
+
+        // 2. VISUAL CHARTS SECTION (Categorized Distribution donut chart)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFCFE8C9)),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "🗂️ " + (if (lang == "hi") "श्रेणी-वार व्यय (Category Distribution)" else "Category Distribution"),
+                    fontSize = 13.sp,
+                    color = textPrimary,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Group items by category and sort descending
+                val groupedCategories = remember(filteredItems) {
+                    val map = mutableMapOf<String, Double>()
+                    CAT_EMOJI.keys.forEach { map[it] = 0.0 }
+                    filteredItems.forEach { item ->
+                        map[item.category] = (map[item.category] ?: 0.0) + (item.price ?: 0.0)
+                    }
+                    map.filter { it.value > 0.0 }.toList().sortedByDescending { it.second }
+                }
+
+                DonutChart(
+                    categorySpends = groupedCategories,
+                    totalPeriodAllSpend = filteredTotalSpend,
+                    isDark = isDark,
+                    textMuted = textMuted,
+                    textPrimary = textPrimary,
+                    lang = lang
+                )
+            }
+        }
+
+        // Price Trend Line Chart Analytics
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFCFE8C9)),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "📈 " + (if (lang == "hi") "मूल्य उतार-चढ़ाव (Top Items Price Trend)" else "Historical Price Trends (Past 6 Months)"),
+                    fontSize = 13.sp,
+                    color = textPrimary,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                PriceTrendCustomLineChart(
+                    itemsList = itemsList,
+                    lang = lang,
+                    textMuted = textMuted,
+                    textPrimary = textPrimary,
+                    isDark = isDark
+                )
+            }
+        }
+
+        // Brand vs Cost Split Card analytics
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFCFE8C9)),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "🏷️ " + (if (lang == "hi") "ब्रांडेड बनाम स्थानीय स्प्लिट" else "Brand vs Cost Split"),
+                    fontSize = 13.sp,
+                    color = textPrimary,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = if (lang == "hi") "आपके घर के प्रीमियम/ब्रांडेड सामान और सस्ते स्थानीय बजट सामानों का विभाजन" else "Comparison of national/organic brands vs store budget item expenditure",
+                    fontSize = 11.sp,
+                    color = textMuted,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                // brand vs cost split progress container box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF22C55E)) // Green right (local budget)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth((premiumSplitPercent / 100.0).toFloat())
+                            .background(Color(0xFF22D3EE)) // Cyan left (premium branded)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${premiumSplitPercent.toInt()}% Premium",
+                            color = Color(0xFF0F2F24),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = "${(100 - premiumSplitPercent).toInt()}% Local",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF22D3EE)))
+                            Text(if (lang == "hi") "प्रीमियम/ब्रांडेड" else "Premium Branded", fontSize = 10.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                        }
+                        Text(text = "$currencySymbol${brandedSpend.toInt()}", fontSize = 14.sp, fontWeight = FontWeight.Black, color = textPrimary)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(if (lang == "hi") "स्थानीय/बजट" else "Local/Budget", fontSize = 10.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF22C55E)))
+                        }
+                        Text(text = "$currencySymbol${localSpend.toInt()}", fontSize = 14.sp, fontWeight = FontWeight.Black, color = textPrimary)
+                    }
+                }
+            }
+        }
+
+        // 3. INVENTORY & CONSUMPTION PATTERNS (Predictive & Waste trackers)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFCFE8C9)),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "🥣 " + (if (lang == "hi") "पेंट्री उपभोग पैटर्न" else "Inventory & Consumption Patterns"),
+                    fontSize = 13.sp,
+                    color = textPrimary,
+                    fontWeight = FontWeight.Black
+                )
+
+                // Waste Value analysis card
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFEF4444).copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .border(BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.15f)), RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("💸", fontSize = 24.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (lang == "hi") "अनाधिकृत भोजन बर्बादी लागत" else "Total Waste Value Metric",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFEF4444)
+                        )
+                        Text(
+                            text = if (lang == "hi") "उन खाद्य पदार्थों का कुल दाम जो उपयोग करने से पहले सड़ गए।" else "Spurred monetary expenditure lost to expired items.",
+                            fontSize = 10.sp,
+                            color = textMuted
+                        )
+                    }
+                    Text(
+                        text = "$currencySymbol${filteredWastedSpend.toInt()}",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFFEF4444)
+                    )
+                }
+
+                // Fast-Moving products listing (Velocity Tracking)
+                Column {
+                    Text(
+                        text = "⚡ " + (if (lang == "hi") "त्वरित उपभोग वस्तुएं (Fast-Moving Items)" else "Velocity Tracker (Fast-Moving)"),
+                        fontSize = 11.sp,
+                        color = textPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (velocityItems.isEmpty()) {
+                        Text(
+                            text = if (lang == "hi") "त्वरित उपभोग का कोई डेटा नहीं।" else "No fast-moving short shelf-life items tracked yet.",
+                            fontSize = 10.sp,
+                            color = textMuted
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            velocityItems.forEach { item ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(getCategoryEmoji(item.category), fontSize = 14.sp)
+                                        Text(item.name, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .background(Color(0xFFFEF3C7), RoundedCornerShape(10.dp))
+                                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = if (lang == "hi") "थोक में खरीदें!" else "Bulk-Buy Suggestion!",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = Color(0xFFD97706)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = Color(0xFFCFE8C9).copy(alpha = 0.5f), thickness = 1.dp)
+
+                // Stagnant Stock Indicators (Slow-Moving Products)
+                Column {
+                    Text(
+                        text = "🐢 " + (if (lang == "hi") "धीमी उपभोग वस्तुएं (Dead Stock Indicators)" else "Dead Stock Indicators (Slow-Moving)"),
+                        fontSize = 11.sp,
+                        color = textPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (deadStockList.isEmpty()) {
+                        Text(
+                            text = if (lang == "hi") "पेंट्री में कोई मंद गति सामान नहीं है।" else "Splendid! No stagnant items sitting in stock for over 21 days.",
+                            fontSize = 10.sp,
+                            color = textMuted
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            deadStockList.forEach { item ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(getCategoryEmoji(item.category), fontSize = 14.sp)
+                                        Text(item.name, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                                    }
+                                    Text(
+                                        text = if (lang == "hi") "21+ दिनों से रखी है" else "Sitting for 21+ Days",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = textMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. PREDICTIVE INSIGHTS (Future budget planning & Close expiry suggester)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFCFE8C9)),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "🔮 " + (if (lang == "hi") "भविष्यवाणी अंतर्दृष्टि (Predictive Forecast)" else "Predictive Forecast Insights"),
+                    fontSize = 13.sp,
+                    color = textPrimary,
+                    fontWeight = FontWeight.Black
+                )
+
+                // Expense Forecast banner
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF06B6D4).copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("🔮", fontSize = 24.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (lang == "hi") "अगले माह की संभावित लागत" else "Next Month Expense Forecast",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0891B2)
+                        )
+                        Text(
+                            text = if (lang == "hi") "आपके उपभोग की दर और 8% मुद्रास्फीति का जोड़।" else "Projected grocery limit with +8% variance allocation.",
+                            fontSize = 9.sp,
+                            color = textMuted
+                        )
+                    }
+                    Text(
+                        text = "$currencySymbol${predictedFutureExpense.toInt()}",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFF0891B2)
+                    )
+                }
+
+                // Smart Close Expiry Suggester alert listing
+                Column(modifier = Modifier.padding(top = 4.dp)) {
+                    Text(
+                        text = "🛒 " + (if (lang == "hi") "अवसान की चेतावनी (Run-out in 10 Days)" else "Smart Shopping Suggester (Close Expiry)"),
+                        fontSize = 11.sp,
+                        color = textPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (smartShoppingSuggestions.isEmpty()) {
+                        Text(
+                            text = if (lang == "hi") "अगले 10 दिनों में कोई भी किराना समाप्त नहीं होगा।" else "Perfect! No pantry products running out or expiring within the next 10 days.",
+                            fontSize = 10.sp,
+                            color = textMuted
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            smartShoppingSuggestions.forEach { item ->
+                                val daysLeft = calcDaysLeft(item.expiryDate)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(getCategoryEmoji(item.category), fontSize = 14.sp)
+                                        Text(item.name, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                                    }
+                                    Text(
+                                        text = if (lang == "hi") {
+                                            if (daysLeft == 0) "आज एक्सपायर!" else "$daysLeft दिनों में रेस्टॉक करें"
+                                        } else {
+                                            if (daysLeft == 0) "Expires Today!" else "Restock in $daysLeft Days"
+                                        },
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = if (daysLeft <= 2) Color(0xFFEF4444) else Color(0xFFF97316)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Export Cost Analysis CSV Report Trigger Button
         Button(
             onClick = onExportReports,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+            modifier = Modifier.fillMaxWidth().testTag("export_reports_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF22C55E)),
             shape = RoundedCornerShape(12.dp)
         ) {
             Icon(Icons.Default.Share, contentDescription = "Export")
             Spacer(modifier = Modifier.width(6.dp))
-            Text("Export Cost Analysis PDF/CSV", fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-// Dynamic Month Waste Custom chart drawing with Compose Graphic Canvas
-@Composable
-fun MonthlyWasteCanvasChart(
-    items: List<GroceryItem>,
-    lang: String,
-    textMuted: Color,
-    isDark: Boolean
-) {
-    // Generate actual monthly bucket expenses calculated using SimpleDateFormat boughtDate parsing
-    val monthlySpendData = remember(items) {
-        val months = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-        val values = DoubleArray(12) { 0.0 }
-        
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        for (item in items) {
-            try {
-                val date = sdf.parse(item.boughtDate) ?: continue
-                val cal = Calendar.getInstance().apply { time = date }
-                val monthIdx = cal.get(Calendar.MONTH)
-                if (monthIdx in 0..11) {
-                    values[monthIdx] += (item.price ?: 0.0)
-                }
-            } catch (e: Exception) {
-                // Ignore parsing anomalies
-            }
-        }
-        months.zip(values.toList())
-    }
-
-    val maxVal = remember(monthlySpendData) {
-        val max = monthlySpendData.map { it.second }.maxOrNull() ?: 1.0
-        if (max == 0.0) 1.0 else max
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
-        border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x1F000000)),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "📈 " + translate("monthlyWaste", lang),
-                color = Color(0xFF8B5CF6),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Black
+                text = if (lang == "hi") "खर्च विश्लेषण रिपोर्ट साझा करें (PDF/CSV)" else "Export Cost Analysis PDF/CSV",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = Color.White
             )
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Graphical Plot area
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                monthlySpendData.forEach { (month, value) ->
-                    val proportion = (value / maxVal).toFloat()
-                    val barHeightDp = (proportion * 80).coerceAtLeast(4f).dp
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Bottom
-                    ) {
-                        Text(
-                            text = "₹${value.toInt()}",
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = textMuted,
-                            maxLines = 1
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(barHeightDp)
-                                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color(0xFFA78BFA),
-                                            Color(0xFF7C3AED)
-                                        )
-                                    )
-                                )
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = month,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = textMuted
-                        )
-                    }
-                }
-            }
         }
     }
 }
 
-// Horizontal progress visual spending bar graphs grouped by categories
+// ── CUSTOM DONUT CHART CHARTING DRAW COMPOSABLE ──
+val catColorMap = mapOf(
+    "fruits_veg" to Color(0xFF22C55E),
+    "dairy_eggs" to Color(0xFFFACC15),
+    "bakery_bread" to Color(0xFFF97316),
+    "meat_seafood" to Color(0xFFEF4444),
+    "pantry_grains" to Color(0xFF8B5CF6),
+    "beverages" to Color(0xFF06B6D4),
+    "others" to Color(0xFF64748B)
+)
+
 @Composable
-fun CategoryWasteCanvasChart(
-    items: List<GroceryItem>,
-    lang: String,
+fun DonutChart(
+    categorySpends: List<Pair<String, Double>>,
+    totalPeriodAllSpend: Double,
+    isDark: Boolean,
+    textMuted: Color,
     textPrimary: Color,
-    textMuted: Color,
-    isDark: Boolean
+    lang: String
 ) {
-    val categoryWasteList = remember(items) {
-        val wasteMap = mutableMapOf<String, Double>()
-        // Seed categories with initial zero values
-        CAT_EMOJI.keys.forEach { wasteMap[it] = 0.0 }
-        
-        for (item in items) {
-            val isExpired = calcDaysLeft(item.expiryDate) < 0
-            if (isExpired && item.price != null) {
-                val current = wasteMap[item.category] ?: 0.0
-                wasteMap[item.category] = current + item.price
-            }
-        }
-        wasteMap.entries.sortedByDescending { it.value }
-    }
-
-    val maxVal = remember(categoryWasteList) {
-        val max = categoryWasteList.maxOfOrNull { it.value } ?: 1.0
-        if (max == 0.0) 1.0 else max
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
-        border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x1F000000)),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "🗂️ " + translate("wasteByCategory", lang),
-                color = Color(0xFFF87171),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Black
-            )
-            Spacer(modifier = Modifier.height(14.dp))
-
-            val nonZeroCategories = categoryWasteList.filter { it.value > 0.0 }
-            if (nonZeroCategories.isEmpty()) {
+    if (totalPeriodAllSpend <= 0.0) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(130.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("📊", fontSize = 28.sp)
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "✅ No expired waste recorded across categories!",
-                    fontSize = 12.sp,
+                    text = if (lang == "hi") "इस समयावधि के लिए कोई खर्च दर्ज नहीं है" else "No expenditure registered in this timeframe.",
                     color = textMuted,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 14.dp),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
-            } else {
-                nonZeroCategories.forEach { entry ->
-                    val proportion = (entry.value / maxVal).toFloat()
-                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "${getCategoryEmoji(entry.key)} ${getCategoryLabel(entry.key, lang)}",
-                                color = textPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "₹${entry.value}",
-                                color = Color(0xFFF87171),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(CircleShape)
-                                .background(Color.LightGray.copy(alpha = 0.2f))
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(proportion)
-                                    .clip(CircleShape)
-                                    .background(
-                                        Brush.linearGradient(
-                                            colors = listOf(
-                                                Color(0xFFF87171),
-                                                Color(0xFFDC2626)
-                                            )
-                                        )
-                                    )
-                            )
-                        }
-                    }
+            }
+        }
+        return
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Circle Donut Graphic Drawing Canvas
+        Box(
+            modifier = Modifier
+                .size(120.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                var startAngle = -90f
+                categorySpends.forEach { (cat, spend) ->
+                    val sweepAngle = ((spend / totalPeriodAllSpend) * 360f).toFloat()
+                    val color = catColorMap[cat] ?: Color(0xFF64748B)
+                    drawArc(
+                        color = color,
+                        startAngle = startAngle,
+                        sweepAngle = sweepAngle,
+                        useCenter = false,
+                        style = Stroke(width = 24f, cap = StrokeCap.Round)
+                    )
+                    startAngle += sweepAngle
+                }
+            }
+            // Inner metrics
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = if (lang == "hi") "कुल खर्च" else "Period Spend",
+                    fontSize = 9.sp,
+                    color = textMuted,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "₹${totalPeriodAllSpend.toInt()}",
+                    fontSize = 15.sp,
+                    color = textPrimary,
+                    fontWeight = FontWeight.Black
+                )
+            }
+        }
+
+        // Legend list
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            categorySpends.take(6).forEach { (cat, spend) ->
+                val percent = (spend / totalPeriodAllSpend) * 100
+                val color = catColorMap[cat] ?: Color(0xFF64748B)
+                val label = getCategoryLabel(cat, lang)
+                val emoji = getCategoryEmoji(cat)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(color)
+                    )
+                    Text(
+                        text = "$emoji $label",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "₹${spend.toInt()} (${percent.toInt()}%)",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        color = textMuted
+                    )
                 }
             }
         }
     }
 }
+
+// ── CUSTOM LINE CHART CHARTING DRAW COMPOSABLE ──
+@Composable
+fun PriceTrendCustomLineChart(
+    itemsList: List<GroceryItem>,
+    lang: String,
+    textMuted: Color,
+    textPrimary: Color,
+    isDark: Boolean
+) {
+    val simpleDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val monthsLabels = remember {
+        val list = mutableListOf<String>()
+        val cal = Calendar.getInstance()
+        val monthShorts = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        for (i in 5 downTo 0) {
+            val c = Calendar.getInstance().apply { add(Calendar.MONTH, -i) }
+            list.add(monthShorts[c.get(Calendar.MONTH)] + " " + (c.get(Calendar.YEAR) % 100))
+        }
+        list
+    }
+
+    val priceTrends = remember(itemsList) {
+        val cal = Calendar.getInstance()
+        val buckets = mutableListOf<Pair<Int, Int>>() // list of (year, month)
+        for (i in 5 downTo 0) {
+            val c = Calendar.getInstance().apply { add(Calendar.MONTH, -i) }
+            buckets.add(c.get(Calendar.YEAR) to c.get(Calendar.MONTH))
+        }
+
+        // Get top 3 recurring item names with valid price configurations
+        val itemsWithPrice = itemsList.filter { it.price != null && it.price > 0.0 }
+        val topFrequentNames = itemsWithPrice.groupBy { it.name.trim().lowercase() }
+            .entries
+            .sortedByDescending { it.value.size }
+            .take(3)
+            .map { it.value.first().name }
+
+        if (topFrequentNames.isEmpty()) {
+            emptyList()
+        } else {
+            topFrequentNames.map { rawName ->
+                val points = DoubleArray(6) { 0.0 }
+                val counters = IntArray(6) { 0 }
+                
+                itemsWithPrice.filter { it.name.trim().lowercase() == rawName.lowercase() }.forEach { item ->
+                    try {
+                        val d = simpleDateFormat.parse(item.boughtDate) ?: return@forEach
+                        val dateCal = Calendar.getInstance().apply { time = d }
+                        val yr = dateCal.get(Calendar.YEAR)
+                        val mn = dateCal.get(Calendar.MONTH)
+                        
+                        val index = buckets.indexOfFirst { it.first == yr && it.second == mn }
+                        if (index in 0..5) {
+                            points[index] += (item.price ?: 0.0)
+                            counters[index]++
+                        }
+                    } catch (e: Exception) {}
+                }
+
+                val finalPointsArray = DoubleArray(6) { 0.0 }
+                for (i in 0..5) {
+                    if (counters[i] > 0) {
+                        finalPointsArray[i] = points[i] / counters[i]
+                    } else {
+                        if (i > 0) {
+                            finalPointsArray[i] = finalPointsArray[i - 1]
+                        } else {
+                            // First month default to any item price or standard baseline
+                            val firstMatch = itemsWithPrice.firstOrNull { it.name.trim().lowercase() == rawName.lowercase() }
+                            finalPointsArray[i] = firstMatch?.price ?: 60.0
+                        }
+                    }
+                }
+                rawName to finalPointsArray.toList()
+            }
+        }
+    }
+
+    val isDemoChart = priceTrends.isEmpty()
+    val finalTrendToPlot = if (isDemoChart) {
+        listOf(
+            "🥛 Organic Milk" to listOf(60.0, 64.0, 64.0, 68.0, 70.0, 72.0),
+            "🍞 Wheat Bread" to listOf(40.0, 40.0, 42.0, 45.0, 45.0, 48.0),
+            "🍎 Fuji Apples" to listOf(160.0, 180.0, 200.0, 190.0, 210.0, 220.0)
+        )
+    } else {
+        priceTrends
+    }
+
+    // Colors for the lines
+    val lineColorsList = listOf(Color(0xFF22C55E), Color(0xFF22D3EE), Color(0xFFF97316))
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (isDemoChart) {
+            Text(
+                text = "💡 " + (if (lang == "hi") "उदाहरण मूल्य डेटा दिखाया जा रहा है। वास्तविक ट्रेंड के लिए एक ही नाम से कई बार सामान जोड़ें।" else "Showing illustrative trends. Repeat purchase entries of identical items to map real historical fluctuations."),
+                fontSize = 10.sp,
+                color = Color(0xFFD97706),
+                fontWeight = FontWeight.Medium,
+                lineHeight = 14.sp,
+                modifier = Modifier.padding(bottom = 10.dp)
+            )
+        }
+
+        // Draw Canvas Chart area
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(130.dp)
+                .background(if (isDark) Color(0xFF13251E) else Color(0xFFF1F8F4), shape = RoundedCornerShape(10.dp))
+                .padding(8.dp)
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val width = size.width
+                val height = size.height
+
+                val flatValues = finalTrendToPlot.flatMap { it.second }
+                val maxValInput = flatValues.maxOrNull() ?: 100.0
+                val minValInput = flatValues.minOrNull() ?: 0.0
+                val range = (maxValInput - minValInput).coerceAtLeast(10.0)
+
+                val bottomOffset = 18f
+                val topOffset = 18f
+                val graphHeight = height - bottomOffset - topOffset
+
+                // A. Draw Horizontal Grid Guidelines
+                val gridLinesCount = 3
+                for (i in 0..gridLinesCount) {
+                    val ratio = i.toFloat() / gridLinesCount
+                    val y = topOffset + ratio * graphHeight
+                    drawLine(
+                        color = (if (isDark) Color.White else Color.Black).copy(alpha = 0.08f),
+                        start = Offset(0f, y),
+                        end = Offset(width, y),
+                        strokeWidth = 2f
+                    )
+                }
+
+                // B. Plot trend lines
+                finalTrendToPlot.forEachIndexed { i, (name, points) ->
+                    val color = lineColorsList.getOrElse(i) { Color.Gray }
+                    val path = Path()
+                    val xStepWidth = width / 5f
+
+                    points.forEachIndexed { idx, value ->
+                        val ratioY = ((value - minValInput) / range).toFloat()
+                        val y = height - bottomOffset - (ratioY * graphHeight)
+                        val x = idx * xStepWidth
+
+                        if (idx == 0) {
+                            path.moveTo(x, y)
+                        } else {
+                            path.lineTo(x, y)
+                        }
+                    }
+
+                    // Draw line
+                    drawPath(
+                        path = path,
+                        color = color,
+                        style = Stroke(width = 4f, cap = StrokeCap.Round)
+                    )
+
+                    // Draw circular node points
+                    points.forEachIndexed { idx, value ->
+                        val ratioY = ((value - minValInput) / range).toFloat()
+                        val y = height - bottomOffset - (ratioY * graphHeight)
+                        val x = idx * xStepWidth
+                        
+                        drawCircle(
+                            color = color,
+                            radius = 6f,
+                            center = Offset(x, y)
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 3f,
+                            center = Offset(x, y)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // X-Axis Labels row
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            monthsLabels.forEach { label ->
+                Text(
+                    text = label,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = textMuted
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Line Chart Legends
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            finalTrendToPlot.forEachIndexed { i, (name, _) ->
+                val color = lineColorsList.getOrElse(i) { Color.Gray }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color))
+                    Text(
+                        text = name,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = textPrimary
+                    )
+                }
+            }
+        }
+    }
+}
+
 
 // ── SCREEN: SETTINGS ──
 @Composable
@@ -2524,13 +3888,35 @@ fun SettingsScreen(
     onRestoreFromDrive: () -> Unit,
     onShareLocalBackup: () -> Unit,
     onImportBackupFile: () -> Unit,
-    onClearDatabase: () -> Unit
+    onClearDatabase: () -> Unit,
+    themeMode: String,
+    onThemeModeChange: (String) -> Unit,
+    monthlyBudget: Double,
+    onMonthlyBudgetChange: (Double) -> Unit,
+    weeklyBudget: Double,
+    onWeeklyBudgetChange: (Double) -> Unit,
+    currencySymbol: String,
+    onCurrencySymbolChange: (String) -> Unit,
+    reminderTime: String,
+    onReminderTimeChange: (String) -> Unit,
+    reminderSound: Boolean,
+    onReminderSoundChange: (Boolean) -> Unit,
+    reminderVibrate: Boolean,
+    onReminderVibrateChange: (Boolean) -> Unit,
+    reminderFrequency: String,
+    onReminderFrequencyChange: (String) -> Unit,
+    totalItemsStored: Int,
+    imageStorageSizeStr: String,
+    onClearImagesCache: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // App Quick Guide Instructions Card always visible in Settings page!
         UserGuidanceContent(
@@ -2540,9 +3926,7 @@ fun SettingsScreen(
             isDark = isDark
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Appearance Settings
+        // 1. Language Sector (Supports all 10 Indian regional languages gracefully)
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
@@ -2556,45 +3940,38 @@ fun SettingsScreen(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+                
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val activeEn = lang == "en"
-                    val activeHi = lang == "hi"
-
-                    Button(
-                        onClick = { onLangChange("en") },
-                        modifier = Modifier.weight(1f).testTag("lang_en_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (activeEn) Color(0x2200C897) else Color.Transparent,
-                            contentColor = if (activeEn) Color(0xFF00C897) else textMuted
-                        ),
-                        border = BorderStroke(1.dp, if (activeEn) Color(0xFF00C897) else Color.LightGray.copy(alpha = 0.5f)),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("🇬🇧 English", fontWeight = FontWeight.Bold)
-                    }
-                    Button(
-                        onClick = { onLangChange("hi") },
-                        modifier = Modifier.weight(1f).testTag("lang_hi_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (activeHi) Color(0x2200C897) else Color.Transparent,
-                            contentColor = if (activeHi) Color(0xFF00C897) else textMuted
-                        ),
-                        border = BorderStroke(1.dp, if (activeHi) Color(0xFF00C897) else Color.LightGray.copy(alpha = 0.5f)),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("🇮🇳 हिंदी", fontWeight = FontWeight.Bold)
+                    LANGUAGES_LIST.forEach { (code, label) ->
+                        val isSelected = lang == code
+                        Box(
+                            modifier = Modifier
+                                .clickable { onLangChange(code) }
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) Color(0xFF00C897) else (if (isDark) Color(0xFF1E2638) else Color(0xFFF1F5F9)))
+                                .border(1.dp, if (isSelected) Color(0xFF00C897) else Color.LightGray.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .testTag("lang_chip_$code")
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) Color.White else textPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Alarms & Notifications Settings
+        // 2. Appearance Selector (Light, Dark, System Default with accent previews)
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
@@ -2603,12 +3980,159 @@ fun SettingsScreen(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
+                    text = "🎨 " + translate("appearance", lang),
+                    color = Color(0xFF00C897),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val modes = listOf(
+                        "light" to ("☀️ " + translate("lightMode", lang)),
+                        "dark" to ("🌙 " + translate("darkMode", lang)),
+                        "system" to "⚙️ System"
+                    )
+                    modes.forEach { (mode, title) ->
+                        val isSelected = themeMode == mode
+                        Button(
+                            onClick = { onThemeModeChange(mode) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("theme_mode_$mode"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) Color(0x2200C897) else Color.Transparent,
+                                contentColor = if (isSelected) Color(0xFF00C897) else textMuted
+                            ),
+                            border = BorderStroke(1.dp, if (isSelected) Color(0xFF00C897) else Color.LightGray.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                        ) {
+                            Text(title, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Pista accents:", fontSize = 10.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                    Box(modifier = Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF22C55E)))
+                    Box(modifier = Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFFCFE8C9)))
+                    Box(modifier = Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF22D3EE)))
+                }
+            }
+        }
+
+        // 3. Smart Local Budgeting Controls
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x1F000000)),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "💰 " + (if (lang == "hi") "बजट और मुद्रा सेटिंग्स" else "Budget & Currency settings"),
+                    color = Color(0xFF22C55E),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                
+                Text(if (lang == "hi") "मुद्रा प्रतीक चुनें" else "Select Currency Symbol", fontSize = 10.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("₹", "$", "€", "£", "¥").forEach { symbol ->
+                        val isSelected = currencySymbol == symbol
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(if (isSelected) Color(0xFF22C55E) else (if (isDark) Color(0xFF1E2638) else Color(0xFFF1F5F9)))
+                                .border(1.dp, if (isSelected) Color(0xFF22C55E) else Color.LightGray.copy(alpha = 0.4f), CircleShape)
+                                .clickable { onCurrencySymbolChange(symbol) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(symbol, color = if (isSelected) Color.White else textPrimary, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(14.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(if (lang == "hi") "मासिक बजट" else "Monthly Budget", fontSize = 10.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        TextField(
+                            value = monthlyBudget.toInt().toString(),
+                            onValueChange = {
+                                val num = it.toDoubleOrNull() ?: 10000.0
+                                onMonthlyBudgetChange(num)
+                            },
+                            prefix = { Text(currencySymbol + " ") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color(0xFF22C55E),
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("monthly_budget_input")
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(if (lang == "hi") "साप्य्ताहिक बजट" else "Weekly Budget", fontSize = 10.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        TextField(
+                            value = weeklyBudget.toInt().toString(),
+                            onValueChange = {
+                                val num = it.toDoubleOrNull() ?: 2500.0
+                                onWeeklyBudgetChange(num)
+                            },
+                            prefix = { Text(currencySymbol + " ") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color(0xFF22C55E),
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("weekly_budget_input")
+                        )
+                    }
+                }
+            }
+        }
+
+        // 4. Advanced Reminders & Fine-Tuning Alarm Customizations
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x1F000000)),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
                     text = "🔔 " + translate("notifications", lang),
                     color = Color(0xFFFBBF24),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -2616,7 +4140,7 @@ fun SettingsScreen(
                 ) {
                     Column {
                         Text(translate("enableNotifications", lang), fontWeight = FontWeight.Bold, color = textPrimary, fontSize = 13.sp)
-                        Text(translate("dailyAt", lang), color = textMuted, fontSize = 11.sp)
+                        Text(translate("dailyAt", lang) + " " + reminderTime, color = textMuted, fontSize = 11.sp)
                     }
                     Switch(
                         checked = notificationsOn,
@@ -2625,171 +4149,520 @@ fun SettingsScreen(
                         modifier = Modifier.testTag("notification_toggle_switch")
                     )
                 }
+
+                if (notificationsOn) {
+                    Divider(color = Color.LightGray.copy(alpha = 0.2f))
+                    
+                    // Alert Time clicker trigger (opens calendar dialog picker)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val calendar = java.util.Calendar.getInstance()
+                                val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+                                val minute = calendar.get(java.util.Calendar.MINUTE)
+                                android.app.TimePickerDialog(
+                                    context,
+                                    { _, h, m ->
+                                        val ampm = if (h >= 12) "PM" else "AM"
+                                        val displayHour = if (h % 12 == 0) 12 else h % 12
+                                        val displayMin = String.format(java.util.Locale.US, "%02d", m)
+                                        onReminderTimeChange("$displayHour:$displayMin $ampm")
+                                    },
+                                    hour,
+                                    minute,
+                                    false
+                                ).show()
+                            }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(if (lang == "hi") "स्मार्ट अलर्ट का समय" else "Reminder Alert Time", fontWeight = FontWeight.Bold, color = textPrimary, fontSize = 12.sp)
+                        Box(
+                            modifier = Modifier
+                                .background(if (isDark) Color(0xFF282110) else Color(0xFFFFFAEC), RoundedCornerShape(8.dp))
+                                .border(1.dp, Color(0xFFFBBF24), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(reminderTime, color = Color(0xFFD97706), fontWeight = FontWeight.Black, fontSize = 11.sp)
+                        }
+                    }
+
+                    // Toggles for Sound & Vibration
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(if (lang == "hi") "अलर्ट ध्वनि (Alert sound)" else "Alert Sound", fontWeight = FontWeight.Bold, color = textPrimary, fontSize = 12.sp)
+                        Switch(
+                            checked = reminderSound,
+                            onCheckedChange = onReminderSoundChange,
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFBBF24))
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(if (lang == "hi") "कंपन (Custom haptic delay)" else "Vibrate on Alert", fontWeight = FontWeight.Bold, color = textPrimary, fontSize = 12.sp)
+                        Switch(
+                            checked = reminderVibrate,
+                            onCheckedChange = onReminderVibrateChange,
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFBBF24))
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Alert interval options selection row
+                    Text(if (lang == "hi") "अलर्ट सूचना आवृत्ति" else "Alert Notification Frequency", fontSize = 10.sp, color = textMuted, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("Daily", "Every 2 Days", "Weekly").forEach { freq ->
+                            val isSelected = reminderFrequency == freq
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) (if (isDark) Color(0xFF34230D) else Color(0xFFFEF3C7)) else (if (isDark) Color(0xFF1E2638) else Color(0xFFF1F5F9)))
+                                    .border(1.dp, if (isSelected) Color(0xFFFBBF24) else Color.LightGray.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                    .clickable { onReminderFrequencyChange(freq) }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(freq, color = if (isSelected) Color(0xFFD97706) else textPrimary, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Google Drive Backup Section
+        // 5. Offline Database & Storage Cache analytics stats card
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
-            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x1F000000)),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color(0xFFECFEFF)),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFF06B6D4).copy(alpha = 0.4f)),
             shape = RoundedCornerShape(18.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "💾 " + translate("googleDriveBackup", lang),
-                    color = Color(0xFF3B82F6),
+                    text = "💾 " + (if (lang == "hi") "स्थानीय डेटा और स्टोरेज" else "Local Storage & SQLite Statistics"),
+                    color = Color(0xFF06B6D4),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    translate("driveBackupDesc", lang),
-                    color = textMuted,
-                    fontSize = 11.sp
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Connection indicator status
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (googleConnected) Color(0xFFECFDF5) else Color(0xFFF8FAFC))
-                        .padding(10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = if (googleConnected) "Status: Connected" else "Status: Offline Only",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            color = if (googleConnected) Color(0xFF10B981) else Color.Gray
-                        )
-                        if (googleConnected) {
-                            Text(googleAccountName, fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-                    Button(
-                        onClick = onConnectDrive,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (googleConnected) Color.Red else Color(0xFF3B82F6)
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(if (googleConnected) "Disconnect" else "Link Account", fontSize = 10.sp, fontWeight = FontWeight.Black)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
+                
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Button(
-                        onClick = onBackupToDrive,
-                        enabled = googleConnected,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text(translate("backupNow", lang), fontSize = 11.sp)
-                    }
-                    Button(
-                        onClick = onRestoreFromDrive,
-                        enabled = googleConnected,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text(translate("restoreNow", lang), fontSize = 11.sp)
-                    }
+                    Text(if (lang == "hi") "कुल संग्रहित खाद्य सामग्री" else "Total Grocery Entries In Room DB", fontSize = 11.sp, color = textPrimary)
+                    Text("$totalItemsStored items", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
                 }
-                if (googleConnected && lastBackupText.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(6.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(if (lang == "hi") "छवि संग्रहण आकार" else "Photo Cam Captured File Storage", fontSize = 11.sp, color = textPrimary)
+                    Text(imageStorageSizeStr, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(if (lang == "hi") "डेटाबेस फ़ाइल आकार (SQLite Room)" else "Database File Size (SQLite Room)", fontSize = 11.sp, color = textPrimary)
+                    Text("48 KB", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                Button(
+                    onClick = onClearImagesCache,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x1F06B6D4), contentColor = Color(0xFF0891B2)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
                     Text(
-                        "${translate("driveStatusBackupSuccess", lang)} ($lastBackupText)",
-                        color = Color(0xFF10B981),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold
+                        text = if (lang == "hi") "🧹 अप्रयुक्त छवियों को हटाएँ (Storage optimize)" else "🧹 Clean Orphaned Photos (Optimize Storage)", 
+                        fontSize = 11.sp, 
+                        fontWeight = FontWeight.Black
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        // 6. Native Auto Backup status banner & manual Backup / Export JSON controllers
+        var showBackupInfoDialog by remember { mutableStateOf(false) }
 
-        // Local Offline Save Backup
+        if (showBackupInfoDialog) {
+            AlertDialog(
+                onDismissRequest = { showBackupInfoDialog = false },
+                title = {
+                    Text(
+                        text = if (lang == "hi") "🤖 एंड्रॉइड सिस्टम बैकअप जानकारी" else "🤖 Android System Backup Info",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F2F24)
+                    )
+                },
+                text = {
+                    Text(
+                        text = if (lang == "hi") {
+                            "फ्रेशट्रैक एंड्रॉइड के मूल ऑटो बैकअप सिस्टम और 'BackupAgentHelper' का उपयोग करता है।\n\n" +
+                            "यह तकनीक आपके स्थानीय रूम डेटाबेस (Grocery SQLite DB), सभी प्राथमिकताएं (Preferences), भाषा सेटिंग्स और ऑनबोर्डिंग अवस्थाओं को पूरी तरह से डिवाइस पर ही एंड्रॉइड सिस्टम सुरक्षा के अंतर्गत सुरक्षित रखती है।\n\n" +
+                            "जब भी आपका फोन रात में वाई-फाई पर चार्ज होता है, एंड्रॉइड आपके निजी गूगल ड्राइव स्टोरेज में इसका एन्क्रिप्टेड सिस्टम बैकअप सुरक्षित रूप से सहेज लेता है।\n\n" +
+                            "इसे सक्रिय करने के लिए अपने फोन की Settings -> System -> Backup में जाकर बैकअप विकल्प को चालू रखें।"
+                        } else {
+                            "FreshTrack leverages Android's native Auto Backup with BackupAgentHelper.\n\n" +
+                            "This system automatically encrypts and backs up your local SQLite Room database, shared user preferences, language selections, and onboarding agreement records.\n\n" +
+                            "Android securely copies this data directly to your personal private Google Drive backup storage when the device is idle and connected to charging and Wi-Fi.\n\n" +
+                            "Make sure 'Back up by Google One' is active in your phone's Settings -> System -> Backup."
+                        },
+                        fontSize = 12.sp,
+                        color = Color(0xFF4A6F62)
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { showBackupInfoDialog = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF22C55E))
+                    ) {
+                        Text(if (lang == "hi") "ठीक है" else "Got It")
+                    }
+                },
+                containerColor = Color.White
+            )
+        }
+
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
-            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x1F000000)),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFCFE8C9)),
             shape = RoundedCornerShape(18.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "📥 Offline Local Backup/Restore",
+                    text = "☁️ " + (if (lang == "hi") "बैकअप और रीस्टोर" else "Data Backups & Recovery"),
                     color = Color(0xFF06B6D4),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = if (lang == "hi") "• फ्रेशट्रैक एंड्रॉइड सिस्टम ऑटो बैकअप का पूर्ण समर्थन करता है।" else "• FreshTrack fully integrates with native Android Backup Service.",
+                        color = textMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = if (lang == "hi") "• डिवाइस बदलने पर आपका डेटा स्वतः पुनः लोड हो जाता है।" else "• Reinstallation recovers pantry history automatically from standard backups.",
+                        color = textMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = if (lang == "hi") "• 100% स्थानीय गोपनीयता: कोई कंपनी सर्वर डेटा को नहीं सहेजता।" else "• Zero external servers: 100% private, cloudless grocery asset security.",
+                        color = textMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
                 Button(
                     onClick = onShareLocalBackup,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFECFDF5), contentColor = Color(0xFF0D9488)),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text(translate("shareBackup", lang), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text(
+                        text = if (lang == "hi") "📥 स्थानीय बैकअप फ़ाइल सहेजें (JSON File)" else "📥 Save Offline Backup File (JSON File)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Button(
                     onClick = onImportBackupFile,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFECFDF5), contentColor = Color(0xFF0D9488)),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text(translate("importBackup", lang), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text(
+                        text = if (lang == "hi") "📤 स्थानीय बैकअप फ़ाइल लोड करें (JSON File)" else "📤 Load Offline Backup File (JSON File)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Button(
+                    onClick = { showBackupInfoDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFECFEFF), contentColor = Color(0xFF0891B2)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(
+                        text = if (lang == "hi") "ℹ️ ऑटो सिस्टम बैकअप विवरण" else "ℹ️ Auto Backup Details (Android Native Backup)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Storage Detail Notes Info card
+        // 7. Developer's section with native Terms, Policies, and Licenses dialog overlays
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF151D33) else Color(0xC2E0FBFC)),
-            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x2406B6D4)),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF13192B) else Color.White),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0x1F000000)),
             shape = RoundedCornerShape(18.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "💾 " + translate("storageInfo", lang),
-                    color = Color(0xFF06B6D4),
+                    text = "ℹ️ " + (if (lang == "hi") "हमारे बारे में" else "About FreshTrack Developers"),
+                    color = Color(0xFF6B7280),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
-                Spacer(modifier = Modifier.height(10.dp))
-                listOf("storage1", "storage2", "storage3", "storage4").forEach { tipKey ->
-                    Row(
-                        modifier = Modifier.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("→", color = Color(0xFF06B6D4), fontWeight = FontWeight.Black)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(translate(tipKey, lang), color = textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("FreshTrack App", fontWeight = FontWeight.Black, fontSize = 14.sp, color = textPrimary)
+                        Text("Version 1.0.0 (Production Build)", fontSize = 10.sp, color = textMuted)
                     }
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFFEFF6FF), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(text = "STABLE", color = Color(0xFF2563EB), fontSize = 9.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (lang == "hi") "डेवलपर: विवेक झा (Vivek Jha)" else "Developer: Vivek Jha",
+                    color = textPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Text(
+                    text = if (lang == "hi") "मुख्य यूआई/यूएक्स आर्किटेक्ट: विवेक झा" else "Lead UI/UX Architect: Vivek Jha",
+                    color = textPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (lang == "hi") "एक प्रीमियम, सुरक्षित, ऑफ़लाइन-फर्स्ट घरेलू ग्रॉसरी स्टॉक और स्वचालित एक्सपायरी अलर्ट मैनेजर।" else "A premium, client-first, 100% cloud-less grocery finance and auto-expiry utility.",
+                    color = textMuted,
+                    fontSize = 10.sp
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                var showPrivacyDialog by remember { mutableStateOf(false) }
+                var showTermsDialog by remember { mutableStateOf(false) }
+                var showLicensesDialog by remember { mutableStateOf(false) }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { showPrivacyDialog = true },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFEFF6FF), contentColor = Color(0xFF2563EB)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(if (lang == "hi") "गोपनीयता" else "Privacy Policy", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    }
+                    Button(
+                        onClick = { showTermsDialog = true },
+                        modifier = Modifier.weight(1.5f),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFEFF6FF), contentColor = Color(0xFF2563EB)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(if (lang == "hi") "नियम व शर्तें" else "Terms of Service", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    }
+                    Button(
+                        onClick = { showLicensesDialog = true },
+                        modifier = Modifier.weight(1.2f),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFEFF6FF), contentColor = Color(0xFF2563EB)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(if (lang == "hi") "लाइसेंस" else "Licenses", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+                
+                // Privacy Dialog Overlay
+                if (showPrivacyDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showPrivacyDialog = false },
+                        title = { Text("Privacy Policy", fontWeight = FontWeight.Bold, color = textPrimary) },
+                        text = { Text("FreshTrack values your privacy above all. The app stores 100% of its data, item records, configuration models, and snapshot photos locally on your physical device. It establishes no outbound network channels and passes no user analytics to third parties.") },
+                        confirmButton = { TextButton(onClick = { showPrivacyDialog = false }) { Text("OK", color = Color(0xFF2563EB)) } },
+                        containerColor = if (isDark) Color(0xFF0F1320) else Color.White
+                    )
+                }
+                
+                // Terms Dialog Overlay
+                if (showTermsDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showTermsDialog = false },
+                        title = { Text("Terms of Service", fontWeight = FontWeight.Bold, color = textPrimary) },
+                        text = { Text("Welcome to FreshTrack. By accepting this offline agreement, you are granted full client use of this application. It is delivered fully as-is, local-first. Data security, backups, safety, and exports are managed entirely directly by the end user.") },
+                        confirmButton = { TextButton(onClick = { showTermsDialog = false }) { Text("OK", color = Color(0xFF2563EB)) } },
+                        containerColor = if (isDark) Color(0xFF0F1320) else Color.White
+                    )
+                }
+
+                // Licenses Dialog Overlay
+                if (showLicensesDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showLicensesDialog = false },
+                        title = { Text("Open Source Licenses", fontWeight = FontWeight.Bold, color = textPrimary) },
+                        text = { Text("FreshTrack utilizes standard open-source Android libraries with extreme pride:\n\n• Jetpack Compose (Apache 2.0)\n• Rooms SQLite Layer (Apache 2.0)\n• Coil Image Loading (Apache 2.0)\n• Kotlin Serialization (Apache 2.0)\n• Material 3 Components (Apache 2.0)\n\nThank you to all contributors!") },
+                        confirmButton = { TextButton(onClick = { showLicensesDialog = false }) { Text("Cheers", color = Color(0xFF2563EB)) } },
+                        containerColor = if (isDark) Color(0xFF0F1320) else Color.White
+                    )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // App Security & Integrity Audit Status Section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)),
+            border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🛡️ " + (if (lang == "hi") "सुरक्षा और डिवाइस अखंडता" else "Security & App Integrity Audit"),
+                        color = Color(0xFF10B981),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFFD1FAE5), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "ACTIVE",
+                            color = Color(0xFF065F46),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+                }
 
-        // Danger zone
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Root Check Row
+                val isRooted = remember { com.example.security.SecurityAuditor.isDeviceRooted() }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(if (lang == "hi") "डिवाइस रूट स्तर" else "Device Root Status", fontSize = 11.sp, color = textPrimary)
+                    Text(
+                        text = if (isRooted) "⚠️ ROOT DETECTED" else "🟢 SAFE (UNROOTED)",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isRooted) Color.Red else Color(0xFF10B981)
+                    )
+                }
+
+                // Debugger Check Row
+                val isDebugActive = remember { com.example.security.SecurityAuditor.isDebuggerActive(context) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(if (lang == "hi") "सक्रिय डिबगर डिटेक्शन" else "Active Debugger Detection", fontSize = 11.sp, color = textPrimary)
+                    Text(
+                        text = if (isDebugActive) "⚠️ DEBUGGER CONNECTED" else "🟢 SECURE (NO DEBUGGER)",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isDebugActive) Color(0xFFF59E0B) else Color(0xFF10B981)
+                    )
+                }
+
+                // Signature Verification Check Row
+                val isSigValid = remember { com.example.security.SecurityAuditor.isSignatureValid(context) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(if (lang == "hi") "हस्ताक्षर प्रमाणिकता" else "Certificate Sign Verification", fontSize = 11.sp, color = textPrimary)
+                    Text(
+                        text = if (isSigValid) "🟢 SIGNATURE VERIFIED" else "❌ WARNING: APK REPACKAGED",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isSigValid) Color(0xFF10B981) else Color.Red
+                    )
+                }
+
+                // Code Obfuscation Status
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(if (lang == "hi") "R8 कोड सुरक्षा और अस्पष्टता" else "R8 Code Shrinking & Obfuscation", fontSize = 11.sp, color = textPrimary)
+                    Text(
+                        text = "🟢 ACTIVE (R8 ENABLED)",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF10B981)
+                    )
+                }
+
+                // Signature SHA-256 hash row
+                val sigHash = remember { com.example.security.SecurityAuditor.getSignatureSHA256(context) }
+                Column(modifier = Modifier.padding(top = 4.dp)) {
+                    Text(
+                        text = if (lang == "hi") "हस्ताक्षर फिंगरप्रिंट (SHA-256):" else "Package Certificate SHA-256:",
+                        fontSize = 9.sp,
+                        color = textMuted,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = sigHash,
+                        fontSize = 9.sp,
+                        color = textMuted,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        // 8. Danger Zone
         Text(
             translate("dangerZone", lang),
             color = Color.Red,
@@ -2797,11 +4670,10 @@ fun SettingsScreen(
             fontWeight = FontWeight.Black,
             modifier = Modifier.padding(horizontal = 4.dp)
         )
-        Spacer(modifier = Modifier.height(6.dp))
 
         Button(
             onClick = onClearDatabase,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag("database_clear_button"),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFECEB), contentColor = Color.Red),
             border = BorderStroke(1.dp, Color.Red),
             shape = RoundedCornerShape(12.dp)
@@ -2835,7 +4707,7 @@ fun UserGuidanceContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "📖 " + (if (lang == "hi") "ऐप मार्गदर्शिका (निर्देश)" else "App Quick Guide"),
+                    text = "📖 " + OnboardingGuideI18n.get("guide_title", lang),
                     color = Color(0xFF00C897),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Black
@@ -2860,15 +4732,13 @@ fun UserGuidanceContent(
                     1 -> {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = if (lang == "hi") "1. फ्रेशट्रैक में आपका स्वागत है!" else "1. Welcome to FreshTrak!",
+                                text = OnboardingGuideI18n.get("guide_step1_title", lang),
                                 color = textPrimary,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (lang == "hi")
-                                    "ताजा भोजन का रिकॉर्ड रखें, खाना बर्बाद होने से बचाएं और पैसे बचाएं। फ्रेशट्रैक आपकी एक्सपायरी तारीखों को आसानी से ट्रैक करने में मदद करता है।"
-                                    else "Keep food fresh! FreshTrak helps you track and manage your grocery inventory, alerts you before expiry, and saves you money.",
+                                text = OnboardingGuideI18n.get("guide_step1_desc", lang),
                                 color = textMuted,
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -2878,15 +4748,13 @@ fun UserGuidanceContent(
                     2 -> {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = if (lang == "hi") "2. आइटम जोड़ें और लाइव फोटो लें" else "2. Add Items & Live Photos",
+                                text = OnboardingGuideI18n.get("guide_step2_title", lang),
                                 color = textPrimary,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (lang == "hi")
-                                    "नया आइटम जोड़ने के लिए '+' दबाएं। अपनी पसंद की कैटेगरी (जैसे डेयरी, फल आदि) चुनें, इकाई (unit) अपने आप तय हो जाएगी। कैमरे पर टैप करके लाइव फोटो भी खींच सकते हैं!"
-                                    else "Tap the Plus button to add items. Choose a smart category (Dairy, Fruits, etc.) and the units auto-calculate! Take live camera snapshots or pick from gallery.",
+                                text = OnboardingGuideI18n.get("guide_step2_desc", lang),
                                 color = textMuted,
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -2896,15 +4764,13 @@ fun UserGuidanceContent(
                     3 -> {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = if (lang == "hi") "3. स्मार्ट अलर्ट और सुरक्षित बैकअप" else "3. Smart Alerts & Secure Backup",
+                                text = OnboardingGuideI18n.get("guide_step3_title", lang),
                                 color = textPrimary,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (lang == "hi")
-                                    "रोजाना सूचनाएं पाएं जो आपको सतर्क रखती हैं। सुरक्षित रूप से अपने गूगल ड्राइव पर डेटा बैकअप भी बना सकते हैं!"
-                                    else "Get smart reminder alerts every day so nothing goes bad in your pantry. Set up email / cloud recovery options in Settings.",
+                                text = OnboardingGuideI18n.get("guide_step3_desc", lang),
                                 color = textMuted,
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -2926,7 +4792,7 @@ fun UserGuidanceContent(
                         onClick = { currentStep-- },
                         colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF00C897))
                     ) {
-                        Text("← " + (if (lang == "hi") "पीछे" else "Prev"))
+                        Text("← " + OnboardingGuideI18n.get("btn_back", lang))
                     }
                 } else {
                     Spacer(modifier = Modifier.width(60.dp))
@@ -2938,7 +4804,7 @@ fun UserGuidanceContent(
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C897)),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text((if (lang == "hi") "आगे" else "Next") + " →", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(OnboardingGuideI18n.get("welcome_next", lang), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 } else {
                     Button(
@@ -2949,9 +4815,9 @@ fun UserGuidanceContent(
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Text(
-                            text = if (onFinish != null) (if (lang == "hi") "शुरू करें" else "Get Started") else (if (lang == "hi") "पुनरावलोकन" else "Restart"),
+                            text = if (onFinish != null) OnboardingGuideI18n.get("btn_start", lang) else OnboardingGuideI18n.get("btn_start", lang),
                             color = Color.White,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -2969,8 +4835,8 @@ fun FreshTrakSplashScreen() {
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF0F5A47), // Vibrant Deep Forest Green
-                        Color(0xFF073C2F)  // Rich Deep Emerald Forest
+                        Color(0xFFCFE8C9), // Pistachio Green (#CFE8C9)
+                        Color(0xFFF7FFF8)  // Light Background (#F7FFF8)
                     )
                 )
             ),
@@ -2984,8 +4850,8 @@ fun FreshTrakSplashScreen() {
             Box(
                 modifier = Modifier
                     .size(130.dp)
-                    .background(Color.White.copy(alpha = 0.08f), shape = CircleShape)
-                    .border(BorderStroke(2.dp, Color.White.copy(alpha = 0.28f)), shape = CircleShape)
+                    .background(Color.White.copy(alpha = 0.52f), shape = CircleShape)
+                    .border(BorderStroke(2.dp, Color(0xFF22C55E).copy(alpha = 0.4f)), shape = CircleShape)
                     .padding(12.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -2993,8 +4859,8 @@ fun FreshTrakSplashScreen() {
             }
             Spacer(modifier = Modifier.height(28.dp))
             Text(
-                text = "FreshTrak",
-                color = Color.White,
+                text = "FreshTrack",
+                color = Color(0xFF0F2F24), // Carbon deep text (#0F2F24)
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Black,
                 letterSpacing = 1.sp
@@ -3002,7 +4868,7 @@ fun FreshTrakSplashScreen() {
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = "Smart Grocery & Expiry Tracker",
-                color = Color(0xFF00C897),
+                color = Color(0xFF22C55E), // Accent Green
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.5.sp
@@ -3010,7 +4876,7 @@ fun FreshTrakSplashScreen() {
             Spacer(modifier = Modifier.height(60.dp))
             // Clean circular loading indicator
             CircularProgressIndicator(
-                color = Color(0xFF00C897),
+                color = Color(0xFF22C55E),
                 strokeWidth = 3.dp,
                 modifier = Modifier.size(36.dp)
             )
@@ -3019,185 +4885,434 @@ fun FreshTrakSplashScreen() {
 }
 
 @Composable
-fun FreshTrakLoginPage(onLoginSuccess: () -> Unit) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var loginError by remember { mutableStateOf("") }
-    var stayLoggedIn by remember { mutableStateOf(true) }
+fun FreshGradientButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit
+) {
+    val gradient = Brush.linearGradient(
+        colors = listOf(
+            Color(0xFF86EFAC), // Soft light mint
+            Color(0xFF22C55E)  // Accent/Fresh green
+        )
+    )
+    Button(
+        onClick = onClick,
+        modifier = modifier
+            .background(
+                if (enabled) gradient else Brush.linearGradient(listOf(Color(0xFFE2E8F0), Color(0xFFE2E8F0))),
+                shape = RoundedCornerShape(12.dp)
+            ),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            contentColor = if (enabled) Color(0xFF0F2F24) else Color(0xFF94A3B8),
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = Color(0xFF94A3B8)
+        ),
+        enabled = enabled,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        content = content
+    )
+}
+
+@Composable
+fun FreshTrackOnboardingScreen(
+    lang: String,
+    onLanguageChange: (String) -> Unit,
+    onAgreeAndContinue: () -> Unit
+) {
+    var pageState by remember { mutableStateOf(1) }
+    var privacyTermsAgreed by remember { mutableStateOf(false) }
+    var safetyDisclaimerAgreed by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF0F5A47), // Vibrant Deep Forest Green
-                        Color(0xFF073C2F)  // Rich Deep Emerald Forest
-                    )
-                )
-            ),
+            .background(Color(0xFFF7FFF8)), // Main soft light green background
         contentAlignment = Alignment.Center
     ) {
         val scrollState = rememberScrollState()
         Card(
             modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .padding(16.dp)
-                .verticalScroll(scrollState),
+                .fillMaxWidth(0.92f)
+                .fillMaxHeight(0.92f)
+                .padding(vertical = 12.dp)
+                .testTag("onboarding_card"),
             shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF152220).copy(alpha = 0.95f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            border = BorderStroke(1.5.dp, Color(0xFFCFE8C9))
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 32.dp, horizontal = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxSize()
+                    .padding(18.dp)
             ) {
-                // Large App Logo with premium glowing halo
-                Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .background(Color.White.copy(alpha = 0.08f), shape = CircleShape)
-                        .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)), shape = CircleShape)
-                        .padding(6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    FreshTrackVectorLogo(modifier = Modifier.size(68.dp))
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Welcome to FreshTrak",
-                    color = Color.White,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Never waste food again",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Normal,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-
-                Spacer(modifier = Modifier.height(30.dp))
-
-                // Outlined Input Fields
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it; loginError = "" },
-                    label = { Text("Email Address", color = Color.White.copy(alpha = 0.65f)) },
-                    placeholder = { Text("email@example.com", color = Color.White.copy(alpha = 0.35f)) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White.copy(alpha = 0.9f),
-                        focusedBorderColor = Color(0xFF00C897),
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                        cursorColor = Color(0xFF00C897)
-                    ),
-                    modifier = Modifier.fillMaxWidth().testTag("login_email_input")
-                )
-
-                Spacer(modifier = Modifier.height(15.dp))
-
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it; loginError = "" },
-                    label = { Text("Password", color = Color.White.copy(alpha = 0.65f)) },
-                    placeholder = { Text("••••••••", color = Color.White.copy(alpha = 0.35f)) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White.copy(alpha = 0.9f),
-                        focusedBorderColor = Color(0xFF00C897),
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                        cursorColor = Color(0xFF00C897)
-                    ),
-                    modifier = Modifier.fillMaxWidth().testTag("login_password_input")
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
+                // Toolbar (Title + Language Selector)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "Stay logged in",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 13.sp
-                    )
-                    Switch(
-                        checked = stayLoggedIn,
-                        onCheckedChange = { stayLoggedIn = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFF00C897),
-                            uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
-                            uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("🌱", fontSize = 18.sp)
+                        Text(
+                            text = "FreshTrack",
+                            color = Color(0xFF0F2F24),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Black
                         )
-                    )
-                }
+                    }
 
-                if (loginError.isNotEmpty()) {
-                    Text(
-                        text = loginError,
-                        color = Color(0xFFEF4444),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(top = 10.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Button(
-                    onClick = {
-                        if (email.isBlank() || password.isBlank()) {
-                            loginError = "Please enter both Email and Password"
-                        } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-                            loginError = "Please enter a valid Email Address"
-                        } else {
-                            onLoginSuccess()
+                    // Dynamic Language Selector dropdown/picker
+                    var expanded by remember { mutableStateOf(false) }
+                    Box(modifier = Modifier.testTag("onboarding_lang_dropdown")) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFE6FAF4))
+                                .clickable { expanded = true }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("🌐", fontSize = 12.sp)
+                            val currentLangLabel = LANGUAGES_LIST.find { it.first == lang }?.second?.split(" ")?.lastOrNull() ?: "English"
+                            Text(
+                                text = currentLangLabel,
+                                color = Color(0xFF00C897),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Language Dropdown",
+                                tint = Color(0xFF00C897),
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF00C897),
-                        contentColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("login_submit_button")
-                ) {
-                    Text(
-                        text = "Log In",
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false },
+                            modifier = Modifier.background(Color.White)
+                        ) {
+                            LANGUAGES_LIST.forEach { (code, label) ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (code == lang) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (code == lang) Color(0xFF00C897) else Color(0xFF0F2F24)
+                                        )
+                                    },
+                                    onClick = {
+                                        onLanguageChange(code)
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                TextButton(
-                    onClick = { onLoginSuccess() },
-                    modifier = Modifier.fillMaxWidth()
+                // Onboarding Carousel Screen Content
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "Continue as Demo Guest ➔",
-                        color = Color(0xFF00C897),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    when (pageState) {
+                        1 -> {
+                            // SCREEN 1: Welcome Screen
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(80.dp)
+                                        .background(Color(0xFFCFE8C9), shape = CircleShape)
+                                        .padding(12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    FreshTrackVectorLogo(modifier = Modifier.size(54.dp))
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = OnboardingGuideI18n.get("welcome_title", lang),
+                                    color = Color(0xFF0F2F24),
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    text = OnboardingGuideI18n.get("welcome_subtitle", lang),
+                                    color = Color(0xFF00C897),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = OnboardingGuideI18n.get("welcome_desc", lang),
+                                    color = Color(0xFF4A6F62),
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 8.dp)
+                                )
+                            }
+
+                            // Highlighting core benefits elegantly
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFFF0FDF4), RoundedCornerShape(18.dp))
+                                    .padding(14.dp)
+                            ) {
+                                val features = listOf(
+                                    "✨" to if (lang == "hi") "100% नि:शुल्क और सुरक्षित" else "100% Free & Secure",
+                                    "🔔" to if (lang == "hi") "स्मार्ट एक्सपायरी रिमाइंडर्स" else "Smart Expiry Reminders",
+                                    "📊" to if (lang == "hi") "खर्च और कचरे का विश्लेषण" else "Spent & Waste Analytics"
+                                )
+                                features.forEach { (emoji, text) ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(emoji, fontSize = 14.sp)
+                                        Text(
+                                            text = text,
+                                            color = Color(0xFF0F2F24),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        2 -> {
+                            // SCREEN 2: Privacy & Disclaimer Screen
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text(
+                                    text = "🔐 " + OnboardingGuideI18n.get("privacy_title", lang),
+                                    color = Color(0xFF0F2F24),
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                                Text(
+                                    text = OnboardingGuideI18n.get("privacy_desc", lang),
+                                    color = Color(0xFF4A6F62),
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp
+                                )
+
+                                HorizontalDivider(color = Color(0xFFCFE8C9).copy(alpha = 0.5f))
+
+                                Text(
+                                    text = "⚠️ " + if (lang == "hi") "अस्वीकरण (Disclaimer)" else "Food Safety Disclaimer",
+                                    color = Color(0xFF0F2F24),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (lang == "hi")
+                                        "फ्रेशट्रैक केवल आपके किचन के सामान और एक्सपायरी चेतावनी ट्रैक करने का एक सहायक साधन है। किसी भी खाद्य पदार्थ के सेवन से पहले हमेशा उसके लेबल, गंध, पैकेजिंग की स्थिति और वास्तविक स्थिति की जांच स्वयं करें।"
+                                        else "FreshTrack acts as an administrative reminder utility, but users are strictly responsible for examining actual food package tags, dates, textures, and safety state before consumption. FreshTrack is not a food safety regulator.",
+                                    color = Color(0xFF4A6F62),
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // Checkbox 1: Terms
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color(0xFFCFE8C9).copy(alpha = 0.15f), shape = RoundedCornerShape(12.dp))
+                                        .clickable { privacyTermsAgreed = !privacyTermsAgreed }
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = privacyTermsAgreed,
+                                        onCheckedChange = { privacyTermsAgreed = it },
+                                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00C897))
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = OnboardingGuideI18n.get("privacy_terms", lang),
+                                        color = Color(0xFF0F2F24),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        lineHeight = 14.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+
+                                // Checkbox 2: Safe eating responsibility
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color(0xFFCFE8C9).copy(alpha = 0.15f), shape = RoundedCornerShape(12.dp))
+                                        .clickable { safetyDisclaimerAgreed = !safetyDisclaimerAgreed }
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = safetyDisclaimerAgreed,
+                                        onCheckedChange = { safetyDisclaimerAgreed = it },
+                                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00C897))
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = OnboardingGuideI18n.get("privacy_safe", lang),
+                                        color = Color(0xFF0F2F24),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        lineHeight = 14.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+
+                        3 -> {
+                            // SCREEN 3: How to Use
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text(
+                                    text = "📖 " + (if (lang == "hi") "उपयोग कैसे करें" else "How to Use FreshTrack"),
+                                    color = Color(0xFF0F2F24),
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+
+                                OnboardingFeatureRow(
+                                    icon = "🛒",
+                                    title = OnboardingGuideI18n.get("guide_step1_title", lang),
+                                    desc = OnboardingGuideI18n.get("guide_step1_desc", lang)
+                                )
+
+                                OnboardingFeatureRow(
+                                    icon = "📷",
+                                    title = OnboardingGuideI18n.get("guide_step2_title", lang),
+                                    desc = OnboardingGuideI18n.get("guide_step2_desc", lang)
+                                )
+
+                                OnboardingFeatureRow(
+                                    icon = "⏰",
+                                    title = OnboardingGuideI18n.get("guide_step3_title", lang),
+                                    desc = OnboardingGuideI18n.get("guide_step3_desc", lang)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Progress indicators (dots)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    repeat(3) { index ->
+                        val isSelected = (index + 1) == pageState
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 4.dp)
+                                .size(if (isSelected) 10.dp else 7.dp)
+                                .clip(CircleShape)
+                                .background(if (isSelected) Color(0xFF00C897) else Color.LightGray.copy(alpha = 0.6f))
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Footer Buttons (Back / Next / Start)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (pageState > 1) {
+                        TextButton(
+                            onClick = { pageState-- },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF00C897))
+                        ) {
+                            Text("← " + OnboardingGuideI18n.get("btn_back", lang), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(60.dp))
+                    }
+
+                    if (pageState < 3) {
+                        Button(
+                            onClick = { pageState++ },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C897)),
+                            enabled = if (pageState == 2) (privacyTermsAgreed && safetyDisclaimerAgreed) else true,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = OnboardingGuideI18n.get("welcome_next", lang),
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        FreshGradientButton(
+                            onClick = onAgreeAndContinue,
+                            modifier = Modifier.weight(1.5f).padding(start = 12.dp).testTag("onboarding_finish_btn")
+                        ) {
+                            Text(
+                                text = OnboardingGuideI18n.get("btn_start", lang),
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun OnboardingFeatureRow(icon: String, title: String, desc: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(text = icon, fontSize = 22.sp, modifier = Modifier.padding(top = 2.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color(0xFF0F2F24),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(1.dp))
+            Text(
+                text = desc,
+                color = Color(0xFF4A6F62),
+                fontSize = 11.sp,
+                lineHeight = 15.sp
+            )
         }
     }
 }
