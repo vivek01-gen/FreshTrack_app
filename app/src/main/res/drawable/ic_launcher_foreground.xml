@@ -8,12 +8,12 @@
 
     <!-- Subtle Ambient Green/Cyan Underglow / Shadow plate behind the dial -->
     <path
-        android:fillColor="#2510B981"
+        android:fillColor="#80CFE8C9"
         android:pathData="M54,54 m-28,0 a28,28 0 1,1 56,0 a28,28 0 1,1 -56,0" />
 
     <!-- Pure Soft White High-Contrast Dial Background -->
     <path
-        android:fillColor="#F8FFFE"
+        android:fillColor="#80CFE8C9"
         android:strokeColor="#1510B981"
         android:strokeWidth="0.5"
         android:pathData="M54,54 m-26,0 a26,26 0 1,1 52,0 a26,26 0 1,1 -52,0" />
