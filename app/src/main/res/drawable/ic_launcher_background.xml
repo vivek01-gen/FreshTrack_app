@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/apk/res/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Background Gradient Frame (Pure Fresh Pista and Mint Blend) -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="135"
+                android:type="linear">
+                <!-- Pista Green Highlight -->
+                <item android:color="#E8F9E4" android:offset="0.0" />
+                <!-- Delicious Soft Pistachio Green -->
+                <item android:color="#CFE8C9" android:offset="0.4" />
+                <!-- Modern Mint Green -->
+                <item android:color="#34D399" android:offset="0.8" />
+                <!-- Vibrant Soft Emerald (gentle depth) -->
+                <item android:color="#10B981" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    
+    <!-- Glossy diagonal ambient light sweep -->
+    <path android:pathData="M0,0 L108,0 L108,35 C108,35 60,65 0,35 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="90"
+                android:type="linear">
+                <item android:color="#45FFFFFF" android:offset="0.0" />
+                <item android:color="#00FFFFFF" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+        
+    <!-- Soft circular light halo around the central active zone (54,54) -->
+    <path
+        android:fillColor="#15FFFFFF"
+        android:pathData="M54,54 m-36,0 a36,36 0 1,1 72,0 a36,36 0 1,1 -72,0" />
+        
+    <!-- High-end elegant inner decorative alignment border -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M14,14 h80 v80 h-80 z"
+        android:strokeWidth="1.0"
+        android:strokeColor="#25FFFFFF" />
+</vector>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Include preferences helper and room databases -->
+    <include domain="sharedpref" path="FreshTrackPrefs.xml" />
+    
+    <!-- Include freshtrack_database files -->
+    <include domain="database" path="freshtrack_database" />
+    <include domain="database" path="freshtrack_database-wal" />
+    <include domain="database" path="freshtrack_database-shm" />
+
+    <!-- Include expiry_reminder_db files as requested by user -->
+    <include domain="database" path="expiry_reminder_db" />
+    <include domain="database" path="expiry_reminder_db-wal" />
+    <include domain="database" path="expiry_reminder_db-shm" />
+
+    <!-- Include fresh_track_database files -->
+    <include domain="database" path="fresh_track_database" />
+    <include domain="database" path="fresh_track_database-wal" />
+    <include domain="database" path="fresh_track_database-shm" />
+    
+    <!-- Exclude volatile caches -->
+    <exclude domain="sharedpref" path="device.xml" />
+    <exclude domain="external" path="." />
+</full-backup-content>

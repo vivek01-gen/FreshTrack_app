@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FreshTrack</string>
+    <string name="privacy_policy_title">गोपनीयता नीति</string>
+    <string name="terms_disclaimer_title">शर्तें और अस्वीकरण</string>
+    <string name="privacy_policy_content" formatted="false">1. परिचय\nफ्रेशट्रैक (FreshTrack) आपकी व्यक्तिगत गोपनीयता की रक्षा के लिए पूरी तरह से प्रतिबद्ध है। हम उपयोगकर्ता डेटा की पूर्ण स्वायत्तता और सुरक्षा में विश्वास करते हैं। यह नीति बताती है कि हम डेटा को कैसे संभालते हैं और हमारे ऐप की ऑफ़लाइन-प्रथम प्रकृति को निर्दिष्ट करती है।\n\n2. 100% ऑफ़लाइन और स्थानीय डेटा संग्रहण\nसभी नोट्स, घरेलू इन्वेंट्री आइटम, श्रेणियां और समाप्ति तिथियां पूरी तरह से आपके डिवाइस के स्थानीय रूम डेटाबेस (Room Database) के अंदर ही संसाधित और संग्रहीत की जाती हैं। किसी भी प्रकार का व्यक्तिगत डेटा, ट्रैकिंग मेट्रिक्स, या इन्वेंट्री जानकारी बाहरी सर्वर या तृतीय-पक्ष वेब सेवाओं पर कतई प्रेषित, संसाधित या संग्रहीत नहीं की जाती है। आपकी इन्वेंट्री सूची पूरी तरह से आपके लिए निजी है।\n\n3. डिवाइस मेटाडेटा और क्रैश एनालिटिक्स\nयह एप्लिकेशन बैकग्राउंड टेलीमेट्री एकत्र नहीं करता है। केवल तब जब आप स्पष्ट रूप से कोई फीडबैक या बग रिपोर्ट फ़ॉर्म सबमिट करते हैं, तो आपका संदेश भेजने के लिए सुरक्षित JavaMail प्रेषण का उपयोग किया जाता है। इस प्रक्रिया में, डेवलपर विवेक झा को बग्स की पहचान करने और उन्हें ठीक करने में सहायता के लिए आवश्यक गैर-पहचान योग्य तकनीकी विवरण (जैसे डिवाइस मॉडल, ब्रांड और ऑपरेटिंग सिस्टम संस्करण) शामिल किए जाते हैं। आपके ईमेल पते का उपयोग केवल आपकी पूछताछ का उत्तर देने के लिए किया जाता है।\n\n4. गूगल ड्राइव ऑटो-बैकअप (Google Drive Auto-Backup)\nफ्रेशट्रैक एंड्रॉइड ऑपरेटिंग सिस्टम द्वारा प्रबंधित मूल एंड्रॉइड ऑटो-बैकअप फ्रेमवर्क का उपयोग करता है। यह सिस्टम आपके व्यक्तिगत, निजी Google ड्राइव स्टोरेज स्पेस में स्वचालित, एन्क्रिप्टेड एप्लिकेशन डेटा प्रतियों को अपलोड करता है। डेवलपर की इस सुरक्षित बैकअप डेटा तक शून्य दृश्यता, शून्य पहुंच और कोई नियंत्रण नहीं है।\n\n5. डेटा हटाना, पहुंच और पूर्ण नियंत्रण\nआप अपने सभी एप्लिकेशन डेटा पर 100% स्वामित्व और पूर्ण नियंत्रण रखते हैं। आप किसी भी समय अपने रिकॉर्ड का निरीक्षण कर सकते हैं। यदि आप संग्रहीत सभी जानकारी को तुरंत मिटाना चाहते हैं, तो आप सेटिंग्स पेज के भीतर \"Reset App Database\" क्रिया निष्पादित कर सकते हैं या एंड्रॉइड सिस्टम सेटिंग्स में स्टोरेज साफ़ कर सकते हैं।</string>
+    <string name="terms_disclaimer_content">1. उपयोग समझौता\nये शर्तें फ्रेशट्रैक (FreshTrack) v1.0.0 के आपके उपयोग को नियंत्रित करती हैं। इस एप्लिकेशन का उपयोग करके, आप इन शर्तों को पूरी तरह से स्वीकार करते हैं। यदि आप इन शर्तों के किसी भी हिस्से से असहमत हैं, तो आपको एप्लिकेशन का उपयोग बंद कर देना चाहिए।\n\n2. सिस्टम अलार्म और अधिसूचना दायित्व अस्वीकरण\nफ्रेशट्रैक वास्तविक समय की समाप्ति और चेतावनी सूचनाएं देने के लिए पूरी तरह से मूल एंड्रॉइड ऑपरेटिंग सिस्टम शेड्यूलर (AlarmManager) पर निर्भर करता है। कृपया ध्यान रखें कि आक्रामक ओएस बैटरी-बचत प्रोटोकॉल, विक्रेता-विशिष्ट सिस्टम ऑप्टिमाइज़र, या डिवाइस बंद होने से निर्धारित अलार्म प्रतिबंधित, विलंबित या पूरी तरह से दबाए जा सकते हैं। डेवलपर विवेक झा छूटे हुए अनुस्मारकों, उपेक्षित अलर्ट, या समाप्त हो चुके इन्वेंट्री आइटम से उत्पन्न होने वाली किसी भी कानूनी या वित्तीय देयता, हानि या क्षति से पूरी तरह मुक्त हैं।\n\n3. डेटा हानि और रिकवरी जोखिम\nचूंकि फ्रेशट्रैक को पूरी तरह से स्थानीय-प्रथम ऑफ़लाइन एप्लिकेशन के रूप में डिज़ाइन किया गया है, इसलिए सभी डेटाबेस स्टोरेज केवल आपके भौतिक डिवाइस के भीतर रहते हैं। यदि आप एप्लिकेशन कैश/स्टोरेज साफ़ करते हैं, एप्लिकेशन अनइंस्टॉल करते हैं, अपने भौतिक हार्डवेयर को खो देते हैं या क्षतिग्रस्त कर देते हैं, या मानक एंड्रॉइड ओएस सिस्टम बैकअप को बायपास करते हैं, तो डेवलपर विवेक झा आपके डेटा को पुनर्प्राप्त, पुनर्निर्मित या एक्सेस नहीं कर सकते हैं। उपयोगकर्ताओं को सलाह दी जाती है कि डेटा हानि को रोकने के लिए नियमित रूप से बैकअप सुविधाओं का उपयोग करें।</string>
+    <string name="app_developed_by">विवेक झा (iam.vkjha.official@gmail.com) द्वारा विकसित</string>
+    <string name="app_version">v1.0.0</string>
+    <string name="backup_card_title">🔒 स्थानीय और क्लाउड बैकअप</string>
+    <string name="backup_card_desc">आपका डेटा 100% सुरक्षित रहता है। \'अभी बैकअप लें\' आपके फोन या Google ड्राइव पर एक सुरक्षित प्रतिलिपि सहेजता है। जब आप ऐप को पुनरारंभ या रीसेट करते हैं, तो एंड्रॉइड स्वचालित रूप से उपलब्ध होने पर आपका डेटा पुनर्स्थापित कर देगा।</string>
+    <string name="backup_btn_label">अभी बैकअप लें</string>
+    <string name="dismiss_btn">बंद करें</string>
+
+    <!-- Notification system-level alarms in Hindi -->
+    <string name="alarm_24h_title">🌿 अलर्ट: २४ घंटे बचे हैं!</string>
+    <string name="alarm_24h_content">\'%1$s\' कल समाप्त (%2$s) होने वाला है। कृपया इसे उपयोग करने की योजना बनाएं!</string>
+    <string name="alarm_12h_title">⚠️ चेतावनी: १२ घंटे बचे हैं!</string>
+    <string name="alarm_12h_content">\'%1$s\' १२ घंटों में समाप्त होने वाला है। भोजन की बर्बादी से बचने के लिए इसे जल्द तैयार करें!</string>
+    <string name="alarm_exact_title">🚨 अलर्ट: आज समाप्त हो रहा है!</string>
+    <string name="alarm_exact_content">\'%1$s\' आज समाप्त (%2$s) हो रहा है। उपभोग करने से पहले ताज़गी की जांच करें!</string>
+
+    <!-- Feedback and Bug Report Strings -->
+    <string name="feedback_menu_title">फ़ीडबैक और बग रिपोर्ट</string>
+    <string name="feedback_menu_subtitle">बग रिपोर्ट करें, सुविधाओं का सुझाव दें, या ऐप को रेट करें</string>
+    <string name="feedback_dialog_title">फ़ीडबैक और बग रिपोर्ट</string>
+    <string name="feedback_name_hint">आपका नाम</string>
+    <string name="feedback_email_hint">आपका ईमेल आईडी</string>
+    <string name="feedback_category_label">श्रेणी</string>
+    <string name="feedback_cat_bug">बग रिपोर्ट करें</string>
+    <string name="feedback_cat_feature">सुविधा का सुझाव दें</string>
+    <string name="feedback_cat_feedback">सामान्य फ़ीडबैक</string>
+    <string name="feedback_cat_other">अन्य</string>
+    <string name="feedback_rating_label">आपकी रेटिंग</string>
+    <string name="feedback_message_hint">यहाँ अपना संदेश लिखें...</string>
+    <string name="feedback_submit_btn">रिपोर्ट जमा करें</string>
+    <string name="feedback_sending">भेजा जा रहा है...</string>
+    <string name="feedback_validation_empty">कृपया सभी फ़ील्ड भरें</string>
+    <string name="feedback_validation_email">कृपया एक मान्य ईमेल पता दर्ज करें</string>
+    <string name="feedback_no_internet">कोई इंटरनेट कनेक्शन नहीं है। कृपया अपना नेटवर्क जांचें और पुनः प्रयास करें।</string>
+    <string name="feedback_success_title">बधाई हो!</string>
+    <string name="feedback_success_desc">बधाई हो! आपका %1$s सफलतापूर्वक भेज दिया गया है। आपकी प्रतिक्रिया के लिए धन्यवाद!</string>
+
+    <!-- Security & App Integrity Audit Strings (Hindi) -->
+    <string name="security_alert_notification_channel_name">सुरक्षा सूचनाएं</string>
+    <string name="security_threat_root_title">🚨 डिवाइस सुरक्षा अखंडता चेतावनी</string>
+    <string name="security_threat_root_desc">डिवाइस की सुरक्षा से समझौता हुआ। अनसत्यापित ऑपरेटिंग सिस्टम या परीक्षण कुंजी मिली है।</string>
+    <string name="security_threat_debug_title">⚠️ सैंडबॉक्स / डीबगर घुसपैठ</string>
+    <string name="security_threat_debug_desc">सक्रिय डिबग निगरानी उपकरण या रिवर्स इंजीनियरिंग सॉफ़्टवेयर हुक मिला है।</string>
+    <string name="security_threat_signature_title">❌ पाइरेटेड या संशोधित ऐप बाइनरी</string>
+    <string name="security_threat_signature_desc">इस पैकेज का हस्ताक्षर प्रमाणपत्र आधिकारिक रिलीज़ से मेल नहीं खाता है।</string>
+    <string name="security_alert_dialog_title">गंभीर सुरक्षा समझौता</string>
+    <string name="security_alert_dialog_body">आपके घरेलू इन्वेंट्री डेटाबेस और स्थानीय निजी भंडारण की सुरक्षा के लिए, फ्रेशट्रैक ने संचालन निलंबित कर दिया है।\n\nकारण: %1$s\n\nकृपया इस संशोधित प्रति को अनइंस्टॉल करें और आधिकारिक स्रोत से मूल एप्लिकेशन प्राप्त करें।</string>
+    <string name="security_alert_dialog_action">आधिकारिक स्रोत से पुनः इंस्टॉल करें</string>
+
+    <!-- Shopping List & Sharing Strings (Hindi) -->
+    <string name="shopping_list_tab">खरीदारी सूची</string>
+    <string name="shopping_list_add_placeholder">सूची में आइटम जोड़ें...</string>
+    <string name="shopping_list_title">खरीदारी सूची</string>
+    <string name="shopping_list_share_title">सूची साझा करें</string>
+    <string name="shopping_list_share_desc">चुनें कि आप अपनी खरीदारी सूची को कैसे साझा करना चाहते हैं:</string>
+    <string name="shopping_list_share_text_btn">साफ़ टेक्स्ट के रूप में साझा करें</string>
+    <string name="shopping_list_share_image_btn">छवि के रूप में साझा करें</string>
+    <string name="shopping_list_undo_deleted">आइटम हटा दिया गया</string>
+    <string name="shopping_list_undo_action">पूर्ववत करें</string>
+    <string name="shopping_list_migrate_title">इन्वेंट्री में ले जाएं</string>
+    <string name="shopping_list_migrate_expiry">समाप्ति तिथि</string>
+    <string name="shopping_list_migrate_category">श्रेणी</string>
+    <string name="shopping_list_migrate_btn">एक्सपायरी ट्रैकर में जोड़ें</string>
+    <string name="shopping_list_migrate_success">सफलतापूर्वक एक्सपायरी ट्रैकर में ले जाया गया!</string>
+    <string name="shopping_list_migrate_swipe">माइग्रेट करें</string>
+    <string name="shopping_list_delete_swipe">हटाएं</string>
+    <string name="shopping_list_cancel">रद्द करें</string>
+    <string name="shopping_list_item_label">आइटम: %1$s</string>
+    <string name="shopping_list_format_help">प्रारूप: YYYY-MM-DD (उदा. 2026-12-31)</string>
+    <string name="shopping_list_empty">आपकी खरीदारी सूची खाली है</string>
+    <string name="shopping_list_empty_hint">शुरू करने के लिए ऊपर आइटम लिखें</string>
+    <string name="shopping_list_no_items_share">साझा करने के लिए कोई आइटम नहीं है!</string>
+    <string name="shopping_list_share_text_header">📋 मेरी खरीदारी सूची:\n</string>
+    <string name="shopping_list_share_footer">\n🌱 FreshTrak के माध्यम से साझा किया गया</string>
+    <string name="shopping_list_image_title">FreshTrak</string>
+    <string name="shopping_list_image_subtitle">खरीदारी की सूची</string>
+    <string name="shopping_list_image_generated">उत्पन्न तिथि: %1$s</string>
+    <string name="shopping_list_image_qty">मात्रा: %1$d</string>
+    <string name="shopping_list_image_watermark">🌱 FreshTrak के साथ हमेशा ताज़ा रहें</string>
+
+    <string name="shopping_list_create_btn">+ नई खरीदारी सूची</string>
+    <string name="shopping_list_rename_btn">सूची का नाम बदलें</string>
+    <string name="shopping_list_delete_btn">सूची हटाएं</string>
+    <string name="shopping_list_duplicate_btn">सूची की प्रतिलिपि बनाएँ</string>
+    <string name="shopping_list_confirm_delete">क्या आप वाकई इस सूची को हटाना चाहते हैं?</string>
+    <string name="shopping_list_dialog_ok">ठीक है</string>
+    <string name="shopping_list_dialog_cancel">रद्द करें</string>
+    <string name="shopping_list_dialog_create_title">खरीदारी सूची बनाएं</string>
+    <string name="shopping_list_dialog_rename_title">सूची का नाम बदलें</string>
+    <string name="shopping_list_dialog_enter_name">सूची का नाम दर्ज करें</string>
+    <string name="shopping_list_auto_title">खरीदारी सूची %1$d</string>
+    <string name="shopping_list_updated_today">आज अपडेट किया गया %1$s</string>
+    <string name="shopping_list_updated_at">अपडेट किया गया %1$s</string>
+    <string name="shopping_list_total_expense_label">कुल खर्च: ₹%1$.2f</string>
+    <string name="shopping_list_progress_label">%1$d में से %2$d खरीदे गए</string>
+    
+    <string name="shopping_list_header_rename">नाम बदलें</string>
+    <string name="shopping_list_header_share">साझा करें</string>
+    <string name="shopping_list_header_more">अधिक विकल्प</string>
+    <string name="shopping_list_item_name_placeholder">वस्तु का नाम</string>
+    <string name="shopping_list_qty_placeholder">मात्रा</string>
+    <string name="shopping_list_price_placeholder">कीमत</string>
+    <string name="shopping_list_add_item_desc">आइटम जोड़ें</string>
+    
+    <string name="shopping_list_summary_total_items">कुल आइटम: %1$d</string>
+    <string name="shopping_list_summary_purchased">खरीदा गया: %1$d</string>
+    <string name="shopping_list_summary_pending">लंबित: %1$d</string>
+    <string name="shopping_list_summary_total_expense">कुल खर्च</string>
+    
+    <string name="shopping_list_complete_btn">खरीदारी पूरी करें</string>
+    <string name="shopping_list_complete_success">खरीदारी पूरी हुई! डेटा एनालिटिक्स में भेजा गया और संग्रहीत किया गया।</string>
+    <string name="shopping_list_completed_badge">पूर्ण</string>
+</resources>

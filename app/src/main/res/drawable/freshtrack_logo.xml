@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="256dp"
+    android:height="256dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+
+    <!-- Background squircle (rounded-corner square) with extremely soft pastel green gradient background -->
+    <path
+        android:pathData="M 30,10 C 10,10 10,30 10,50 L 10,206 C 10,226 10,246 30,246 L 226,246 C 246,246 246,226 246,206 L 246,50 C 246,30 246,10 226,10 Z"
+        android:fillColor="#EAFCE8" />
+
+    <!-- Outer Dial Halo Ring -->
+    <path
+        android:pathData="M 128,128 m -76,0 a 76,76 0 1,1 152,0 a 76,76 0 1,1 -152,0"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4" />
+
+    <!-- Main Clock Ring -->
+    <path
+        android:pathData="M 128,128 m -68,0 a 68,68 0 1,1 136,0 a 68,68 0 1,1 -136,0"
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#22C55E"
+        android:strokeWidth="5" />
+
+    <!-- Left side wrapping leaf -->
+    <path
+        android:pathData="M 70,165 C 45,140 40,95 68,75 C 85,92 98,120 70,165 Z"
+        android:fillColor="#22C55E" />
+
+    <!-- Leaf center vein -->
+    <path
+        android:pathData="M 70,165 C 62,142 62,112 68,75"
+        android:strokeColor="#EAFCE8"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+
+    <!-- Dial Tick marks (12, 3, 6, 9) -->
+    <!-- 12 o'clock -->
+    <path
+        android:pathData="M 128,68 L 128,76"
+        android:strokeColor="#22C55E"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+    <!-- 3 o'clock -->
+    <path
+        android:pathData="M 180,128 L 188,128"
+        android:strokeColor="#22C55E"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+    <!-- 6 o'clock -->
+    <path
+        android:pathData="M 128,180 L 128,188"
+        android:strokeColor="#22C55E"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+
+    <!-- Clock Hands -->
+    <!-- Hour hand (pointing towards 2) -->
+    <path
+        android:pathData="M 128,128 L 152,110"
+        android:strokeColor="#14532D"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+    <!-- Minute hand (pointing towards 10) -->
+    <path
+        android:pathData="M 128,128 L 98,102"
+        android:strokeColor="#22C55E"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+
+    <!-- Center pin hub -->
+    <path
+        android:pathData="M 128,128 m -5,0 a 5,5 0 1,1 10,0 a 5,5 0 1,1 -10,0"
+        android:fillColor="#14532D" />
+    <path
+        android:pathData="M 128,128 m -2,0 a 2,2 0 1,1 4,0 a 2,2 0 1,1 -4,0"
+        android:fillColor="#FFFFFF" />
+
+    <!-- FreshTrak text inside bottom-right quadrant of clock dial -->
+    <!-- F -->
+    <path
+        android:pathData="M 122,143 L 128,143 M 122,143 L 122,156 M 122,148 L 127,148"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round" />
+    <!-- r -->
+    <path
+        android:pathData="M 132,156 L 132,148 C 132,145 135,145 135,148"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round" />
+    <!-- e -->
+    <path
+        android:pathData="M 143,151 C 143,148 138,148 138,151 C 138,154 143,154 143,152"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round" />
+    <!-- s -->
+    <path
+        android:pathData="M 149,148 C 146,148 146,151 149,151 C 149,155 146,155 146,152"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round" />
+    <!-- h -->
+    <path
+        android:pathData="M 153,143 L 153,156 M 153,149 C 155,148 158,148 158,151 L 158,156"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round" />
+
+    <!-- T -->
+    <path
+        android:pathData="M 163,143 L 171,143 M 167,143 L 167,156"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round" />
+    <!-- r -->
+    <path
+        android:pathData="M 174,156 L 174,148 C 174,145 177,145 177,148"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round" />
+    <!-- a -->
+    <path
+        android:pathData="M 183,156 C 180,156 179,154 179,151 C 179,148 183,148 183,151 M 183,148 L 183,156"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round" />
+    <!-- k -->
+    <path
+        android:pathData="M 187,143 L 187,156 M 187,150 L 193,145 M 189,151 L 193,156"
+        android:strokeColor="#14532D"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round" />
+</vector>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Include preferences and database elements for cloud-driven device synchronization -->
+        <include domain="sharedpref" path="FreshTrackPrefs.xml" />
+        
+        <!-- Include freshtrack_database files -->
+        <include domain="database" path="freshtrack_database" />
+        <include domain="database" path="freshtrack_database-wal" />
+        <include domain="database" path="freshtrack_database-shm" />
+
+        <!-- Include expiry_reminder_db files as requested by user -->
+        <include domain="database" path="expiry_reminder_db" />
+        <include domain="database" path="expiry_reminder_db-wal" />
+        <include domain="database" path="expiry_reminder_db-shm" />
+
+        <!-- Include fresh_track_database files -->
+        <include domain="database" path="fresh_track_database" />
+        <include domain="database" path="fresh_track_database-wal" />
+        <include domain="database" path="fresh_track_database-shm" />
+    </cloud-backup>
+    <device-transfer>
+        <!-- Specify peer-to-peer transfer files when transitioning to a new phone -->
+        <include domain="sharedpref" path="FreshTrackPrefs.xml" />
+        
+        <!-- Include freshtrack_database files -->
+        <include domain="database" path="freshtrack_database" />
+        <include domain="database" path="freshtrack_database-wal" />
+        <include domain="database" path="freshtrack_database-shm" />
+
+        <!-- Include expiry_reminder_db files as requested by user -->
+        <include domain="database" path="expiry_reminder_db" />
+        <include domain="database" path="expiry_reminder_db-wal" />
+        <include domain="database" path="expiry_reminder_db-shm" />
+
+        <!-- Include fresh_track_database files -->
+        <include domain="database" path="fresh_track_database" />
+        <include domain="database" path="fresh_track_database-wal" />
+        <include domain="database" path="fresh_track_database-shm" />
+    </device-transfer>
+</data-extraction-rules>
